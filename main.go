@@ -57,7 +57,7 @@ func main() {
 
 	nodeIssueReportInformer := nodeIssueReportFactory.Nodeissuereporter().V1alpha1().NodeIssueReports()
 
-	nircontroller := controller.NewNIRController(nodeIssueReportInformer)
+	// nircontroller := controller.NewNIRController(nodeIssueReportInformer)
 	eventcontroller := controller.NewEventController(eventInformer, nodeIssueReportInformer, *clientset, *nirclient)
 
 	// stopcha := make(chan struct{})

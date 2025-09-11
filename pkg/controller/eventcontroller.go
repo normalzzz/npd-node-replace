@@ -20,7 +20,14 @@ import (
 
 	nirinformer "xingzhan-node-autoreplace/pkg/generated/informers/externalversions/nodeIssueReport/v1alpha1"
 	nirlister "xingzhan-node-autoreplace/pkg/generated/listers/nodeIssueReport/v1alpha1"
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"context"
+
+	// nodeIssueReport "xingzhan-node-autoreplace/pkg/generated/clientset/versioned/typed/nodeIssueReport/v1alpha1"
 	// v1alpha1 "xingzhan-node-autoreplace/pkg/generated/informers/externalversions/nodeIssueReport/v1alpha1"
+
+	nodeIssueReportv1alpha1 "xingzhan-node-autoreplace/pkg/apis/nodeIssueReport/v1alpha1"
 )
 
 const (
@@ -42,6 +49,27 @@ type EventController struct {
 	kubeclient kubernetes.Clientset
 
 	nirclient nirclient.Clientset
+}
+
+func constructNodeIssueReport(event *corev1.Event) nodeIssueReportv1alpha1.NodeIssueReport {
+	name := event.InvolvedObject.Name
+	namespace := event.InvolvedObject.Namespace
+	nodeproblems := make(map[nodeIssueReportv1alpha1.ReasonRecord][]string)
+	nodeproblems[nodeIssueReportv1alpha1.ReasonRecord{Reason: event.Reason, Count: event.Count}] = []string{event.Message}
+	return nodeIssueReportv1alpha1.NodeIssueReport{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		Spec: nodeIssueReportv1alpha1.NodeIssueReportSpec{NodeName: name, NodeProblems: nodeproblems},
+	}
+}
+
+func (c *EventController) updateNodeIssueReport(nodeissuereport *nodeIssueReportv1alpha1.NodeIssueReport, event *corev1.Event) error {
+	nodeissuereport.Spec.NodeProblems[nodeIssueReportv1alpha1.ReasonRecord{Reason: event.Reason, Count: event.Count}] = []string{event.Message}
+	_, err := c.nirclient.NodeissuereporterV1alpha1().NodeIssueReports(nodeissuereport.Namespace).Update(context.Background(), nodeissuereport, metav1.UpdateOptions{})
+	if err != nil {
+		log.Errorln("failed to update node issue report", err)
+		return err
+	}
+	return nil
 }
 
 func (c *EventController) processNextItem() bool {
@@ -69,9 +97,31 @@ func (c *EventController) processNextItem() bool {
 
 	nodename := event.InvolvedObject.Name
 
+	// usually the namespace is "default, inhirited from the events
 	nodeissuereport, err := c.nodeIssueReportLister.NodeIssueReports(namespace).Get(nodename)
-	_ = nodeissuereport
+	// _ = nodeissuereport
 	// 2. check if there is a node issue report for the node
+
+	// 3. if there is no node issue report, create a new one
+	// 4. if there is a node issue report, update the node issue report
+	if errors.IsNotFound(err) {
+		log.Infoln("no node issue report found for the node: ", nodename)
+		nodeissuereport := constructNodeIssueReport(event)
+
+		_, err = c.nirclient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Create(context.Background(), &nodeissuereport, metav1.CreateOptions{})
+		if err != nil {
+			log.Errorln("failed to create node issue report", err)
+		}
+		return true
+	}
+
+	err = c.updateNodeIssueReport(nodeissuereport, event)
+	if err != nil {
+		log.Errorln("failed to update node issue report", err)
+		return true
+	}
+	
+
 	// 3. if there is no node issue report, create a new one
 	// 4. if there is a node issue report, update the node issue report
 
