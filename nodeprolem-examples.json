@@ -1,0 +1,51 @@
+{
+    "metadata": {
+        "name": "ip-172-31-30-229.cn-north-1.compute.internal.186435f80f34c473",
+        "namespace": "default",
+        "uid": "49f47c91-14c9-4673-a448-64286d0b7e00",
+        "resourceVersion": "175353173",
+        "creationTimestamp": "2025-09-11T11:11:34Z",
+        "managedFields": [
+            {
+                "manager": "node-problem-detector",
+                "operation": "Update",
+                "apiVersion": "v1",
+                "time": "2025-09-11T11:11:34Z",
+                "fieldsType": "FieldsV1",
+                "fieldsV1": {
+                    "f:count": {},
+                    "f:firstTimestamp": {},
+                    "f:involvedObject": {},
+                    "f:lastTimestamp": {},
+                    "f:message": {},
+                    "f:reason": {},
+                    "f:reportingComponent": {},
+                    "f:reportingInstance": {},
+                    "f:source": {
+                        "f:component": {},
+                        "f:host": {}
+                    },
+                    "f:type": {}
+                }
+            }
+        ]
+    },
+    "involvedObject": {
+        "kind": "Node",
+        "name": "ip-172-31-30-229.cn-north-1.compute.internal",
+        "uid": "ip-172-31-30-229.cn-north-1.compute.internal"
+    },
+    "reason": "OOMKilling",
+    "message": "Killed process 12345 (myapp) total-vm:102400kB, anon-rss:51200kB, file-rss:2048kB",
+    "source": {
+        "component": "kernel-monitor",
+        "host": "ip-172-31-30-229.cn-north-1.compute.internal"
+    },
+    "firstTimestamp": "2025-09-11T11:11:34Z",
+    "lastTimestamp": "2025-09-11T11:11:34Z",
+    "count": 1,
+    "type": "Warning",
+    "eventTime": null,
+    "reportingComponent": "kernel-monitor",
+    "reportingInstance": "ip-172-31-30-229.cn-north-1.compute.internal"
+}
