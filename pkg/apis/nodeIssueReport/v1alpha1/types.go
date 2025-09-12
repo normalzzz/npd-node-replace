@@ -36,8 +36,6 @@ type NodeIssueReport struct {
 type NodeIssueReportSpec struct {
 	NodeName    string `json:"nodename"`
 	NodeProblems map[ReasonRecord][]string `json:"nodeproblems"`
-	// EcrSecretName string `json:"ecrSecretName"`
-	EcrUrl string `json:"ecrUrl"`
 }
 
 // NodeIssueReportStatus is the status for a NodeIssueReport resource
