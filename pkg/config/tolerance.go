@@ -19,7 +19,7 @@ const (
 // }
 
 type Tolerance struct {
-	Times int `json:"times"`
+	Times int32 `json:"times"`
 
 	Action Action `json:"action"`
 }

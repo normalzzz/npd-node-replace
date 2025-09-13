@@ -135,7 +135,7 @@ func (c *EventController) processNextItem() bool {
 
 	nodename := event.InvolvedObject.Name
 
-	// usually the namespace is "default, inhirited from the events
+	// usually the namespace is "default", inhirited from the events
 	nodeissuereport, err := c.nodeIssueReportLister.NodeIssueReports(namespace).Get(nodename)
 	// _ = nodeissuereport
 	// 2. check if there is a node issue report for the node
