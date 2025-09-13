@@ -12,6 +12,7 @@ import (
 	nirclient "xingzhan-node-autoreplace/pkg/generated/clientset/versioned"
 	nodeIssueReport "xingzhan-node-autoreplace/pkg/generated/informers/externalversions/nodeIssueReport/v1alpha1"
 
+	nodeIssueReportv1alpha1 "xingzhan-node-autoreplace/pkg/apis/nodeIssueReport/v1alpha1"
 	nodeIssueReportLister "xingzhan-node-autoreplace/pkg/generated/listers/nodeIssueReport/v1alpha1"
 )
 
@@ -65,15 +66,15 @@ func (n *NIRController) processNextItem() bool {
 	nodename := nodeIssueReport.Spec.NodeName
 	problems := nodeIssueReport.Spec.NodeProblems
 
-	if nodeIssueReport.Spec.TakeAction {
-		action := tolerance.Action
+	if nodeIssueReport.Spec.Action != nodeIssueReportv1alpha1.None {
+		//action := n.toleranceConfig.ToleranceCollection[]
 
-		if action == "reboot" {
+		if nodeIssueReport.Spec.Action == nodeIssueReportv1alpha1.Reboot {
 			//TODO aws reboot action logic
 
 			log.Infoln("found fatal errors, rebooted node:", nodename)
 			return true
-		} else if action == "replace" {
+		} else if nodeIssueReport.Spec.Action == nodeIssueReportv1alpha1.Replace {
 			//TODO aws replace node logic
 
 			log.Infoln("found fatal errors, replaced node:", nodename)
@@ -82,13 +83,24 @@ func (n *NIRController) processNextItem() bool {
 
 	}
 
+	// travesal all
 	for problemname, problem := range problems {
+		// get the tolerance config for specific senario
 		tolerancecount := n.toleranceConfig.ToleranceCollection[problemname]
 
-		if tolerancecount.Times >= problem.Count {
-			nodeIssueReport.Spec.TakeAction = true
-			n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.Background(), nodeIssueReport, metav1.UpdateOptions{})
-			return true
+		if tolerancecount.Times <= problem.Count {
+			//nodeIssueReport.Spec.Action = true
+			toleranceAction := tolerancecount.Action
+			if toleranceAction == config.ActionReboot {
+				nodeIssueReport.Spec.Action = nodeIssueReportv1alpha1.Reboot
+				n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.Background(), nodeIssueReport, metav1.UpdateOptions{})
+				return true
+			} else if toleranceAction == config.ActionReplace {
+				nodeIssueReport.Spec.Action = nodeIssueReportv1alpha1.Replace
+				n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.Background(), nodeIssueReport, metav1.UpdateOptions{})
+				return true
+			}
+
 		}
 		return true
 	}

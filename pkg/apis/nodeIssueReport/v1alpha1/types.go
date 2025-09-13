@@ -37,7 +37,7 @@ type NodeIssueReport struct {
 type NodeIssueReportSpec struct {
 	NodeName     string                   `json:"nodename"`
 	NodeProblems map[string]ProblemRecord `json:"nodeproblems"`
-	TakeAction   bool                     `json:"takeaction"`
+	Action       Action                   `json:"action"`
 }
 
 // NodeIssueReportStatus is the status for a NodeIssueReport resource
@@ -60,3 +60,11 @@ type ProblemRecord struct {
 	Count   int32    `json:"count"`
 	Message []string `json:"message"`
 }
+
+type Action string
+
+const (
+	Reboot  Action = "reboot"
+	Replace Action = "replace"
+	None    Action = "none"
+)

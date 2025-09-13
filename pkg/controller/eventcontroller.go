@@ -75,7 +75,7 @@ func constructNodeIssueReport(event *corev1.Event) nodeIssueReportv1alpha1.NodeI
 		Spec: nodeIssueReportv1alpha1.NodeIssueReportSpec{
 			NodeName:     event.InvolvedObject.Name,
 			NodeProblems: nodeprolems,
-			TakeAction:   false,
+			Action:       nodeIssueReportv1alpha1.None,
 		},
 	}
 }

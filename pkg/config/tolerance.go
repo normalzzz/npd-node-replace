@@ -10,7 +10,7 @@ import (
 type Action string
 
 const (
-	ActionBoot    Action = "reboot"
+	ActionReboot  Action = "reboot"
 	ActionReplace Action = "replace"
 )
 
