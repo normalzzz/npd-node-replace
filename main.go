@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	nested "github.com/antonfisher/nested-logrus-formatter"
 	log "github.com/sirupsen/logrus"
 	"k8s.io/client-go/informers"
@@ -8,10 +9,14 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"time"
+	awspkg "xingzhan-node-autoreplace/pkg/aws"
 	"xingzhan-node-autoreplace/pkg/controller"
 	nirclient "xingzhan-node-autoreplace/pkg/generated/clientset/versioned"
 	nodeissuereportinformer "xingzhan-node-autoreplace/pkg/generated/informers/externalversions"
 	"xingzhan-node-autoreplace/pkg/signal"
+
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"os"
 )
 
 func init() {
@@ -21,6 +26,13 @@ func init() {
 }
 
 func main() {
+
+	regionid := os.Getenv("AWS_REGION")
+	cfg, err := awsconfig.LoadDefaultConfig(context.TODO(), awsconfig.WithRegion(regionid))
+	if err != nil {
+		log.Fatal("failed to load aws config", err)
+	}
+	awsOperator := awspkg.NewAwsOperator(cfg)
 
 	config, err := clientcmd.BuildConfigFromFlags("", clientcmd.RecommendedHomeFile)
 
@@ -63,7 +75,11 @@ func main() {
 
 	eventcontroller.Run(stopcha)
 
-	controller.NewNIRController(nodeIssueReportInformer, *nirclient)
+	awspkg.NewAwsOperator()
+
+	nircontroller := controller.NewNIRController(nodeIssueReportInformer, *nirclient, *clientset, awsOperator)
+
+	nircontroller.Run(stopcha)
 
 	//toleranceColl, err := config.LoadConfiguration()
 	//
