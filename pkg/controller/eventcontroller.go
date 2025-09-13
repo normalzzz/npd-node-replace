@@ -18,11 +18,11 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 
-	nirinformer "xingzhan-node-autoreplace/pkg/generated/informers/externalversions/nodeIssueReport/v1alpha1"
-	nirlister "xingzhan-node-autoreplace/pkg/generated/listers/nodeIssueReport/v1alpha1"
+	"context"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"context"
+	nirinformer "xingzhan-node-autoreplace/pkg/generated/informers/externalversions/nodeIssueReport/v1alpha1"
+	nirlister "xingzhan-node-autoreplace/pkg/generated/listers/nodeIssueReport/v1alpha1"
 
 	// nodeIssueReport "xingzhan-node-autoreplace/pkg/generated/clientset/versioned/typed/nodeIssueReport/v1alpha1"
 	// v1alpha1 "xingzhan-node-autoreplace/pkg/generated/informers/externalversions/nodeIssueReport/v1alpha1"
@@ -54,22 +54,60 @@ type EventController struct {
 func constructNodeIssueReport(event *corev1.Event) nodeIssueReportv1alpha1.NodeIssueReport {
 	name := event.InvolvedObject.Name
 	namespace := event.InvolvedObject.Namespace
-	nodeproblems := make(map[nodeIssueReportv1alpha1.ReasonRecord][]string)
-	nodeproblems[nodeIssueReportv1alpha1.ReasonRecord{Reason: event.Reason, Count: event.Count}] = []string{event.Message}
+	//nodeproblems := make(map[nodeIssueReportv1alpha1.ReasonRecord][]string)
+	//nodeproblems[nodeIssueReportv1alpha1.ReasonRecord{Reason: event.Reason, Count: event.Count}] = []string{event.Message}
+	//return nodeIssueReportv1alpha1.NodeIssueReport{
+	//	ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+	//	Spec: nodeIssueReportv1alpha1.NodeIssueReportSpec{NodeName: name, NodeProblems: nodeproblems},
+	//}
+
+	nodeprolems := make(map[string]nodeIssueReportv1alpha1.ProblemRecord)
+	nodeprolems[event.Reason] = nodeIssueReportv1alpha1.ProblemRecord{
+		Count:   event.Count,
+		Message: []string{event.Message},
+	}
+
 	return nodeIssueReportv1alpha1.NodeIssueReport{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
-		Spec: nodeIssueReportv1alpha1.NodeIssueReportSpec{NodeName: name, NodeProblems: nodeproblems},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Spec: nodeIssueReportv1alpha1.NodeIssueReportSpec{
+			NodeName:     event.InvolvedObject.Name,
+			NodeProblems: nodeprolems,
+			TakeAction:   false,
+		},
 	}
 }
 
 func (c *EventController) updateNodeIssueReport(nodeissuereport *nodeIssueReportv1alpha1.NodeIssueReport, event *corev1.Event) error {
-	nodeissuereport.Spec.NodeProblems[nodeIssueReportv1alpha1.ReasonRecord{Reason: event.Reason, Count: event.Count}] = []string{event.Message}
+	//nodeissuereport.Spec.NodeProblems[nodeIssueReportv1alpha1.ReasonRecord{Reason: event.Reason, Count: event.Count}] = []string{event.Message}
+	//_, err := c.nirclient.NodeissuereporterV1alpha1().NodeIssueReports(nodeissuereport.Namespace).Update(context.Background(), nodeissuereport, metav1.UpdateOptions{})
+	//if err != nil {
+	//	log.Errorln("failed to update node issue report", err)
+	//	return err
+	//}
+	//return nil
+
+	nodeprolems, exist := nodeissuereport.Spec.NodeProblems[event.Reason]
+	if exist {
+		nodeprolems.Count = event.Count
+		nodeprolems.Message = append(nodeprolems.Message, event.Message)
+		nodeissuereport.Spec.NodeProblems[event.Reason] = nodeprolems
+	} else {
+
+		nodeissuereport.Spec.NodeProblems[event.Reason] = nodeIssueReportv1alpha1.ProblemRecord{
+			Count:   event.Count,
+			Message: []string{event.Message},
+		}
+	}
 	_, err := c.nirclient.NodeissuereporterV1alpha1().NodeIssueReports(nodeissuereport.Namespace).Update(context.Background(), nodeissuereport, metav1.UpdateOptions{})
 	if err != nil {
 		log.Errorln("failed to update node issue report", err)
 		return err
 	}
 	return nil
+
 }
 
 func (c *EventController) processNextItem() bool {
@@ -120,7 +158,6 @@ func (c *EventController) processNextItem() bool {
 		log.Errorln("failed to update node issue report", err)
 		return true
 	}
-	
 
 	// 3. if there is no node issue report, create a new one
 	// 4. if there is a node issue report, update the node issue report

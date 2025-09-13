@@ -24,18 +24,20 @@ import (
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 // NodeIssueReport is a specification for a NodeIssueReport resource
+// type Reason string
 type NodeIssueReport struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   NodeIssueReportSpec   `json:"spec"`
+	Spec NodeIssueReportSpec `json:"spec"`
 	// Status NodeIssueReportStatus `json:"status"`
 }
 
 // NodeIssueReportSpec is the spec for a NodeIssueReport resource
 type NodeIssueReportSpec struct {
-	NodeName    string `json:"nodename"`
-	NodeProblems map[ReasonRecord][]string `json:"nodeproblems"`
+	NodeName     string                   `json:"nodename"`
+	NodeProblems map[string]ProblemRecord `json:"nodeproblems"`
+	TakeAction   bool                     `json:"takeaction"`
 }
 
 // NodeIssueReportStatus is the status for a NodeIssueReport resource
@@ -53,8 +55,8 @@ type NodeIssueReportList struct {
 	Items []NodeIssueReport `json:"items"`
 }
 
-
-type ReasonRecord struct {
-	Reason string `json:"reason"`
-	Count int32 `json:"count"`
+type ProblemRecord struct {
+	//Reason string `json:"reason"`
+	Count   int32    `json:"count"`
+	Message []string `json:"message"`
 }
