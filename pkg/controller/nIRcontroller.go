@@ -275,8 +275,16 @@ func (n *NIRController) processNextItem() bool {
 				return true
 			}
 
-			newNodeName := <-newNodeChan
-			log.Infoln("New node ready:", newNodeName)
+			newNodeName := ""
+			select {
+			case newNodeName := <-newNodeChan:
+				log.Infoln("New node ready:", newNodeName)
+			case <-time.After(5 * time.Minute):
+				log.Errorln("timed out waiting for new node to become ready")
+				n.queue.AddRateLimited(key)
+				return true
+			}
+
 			// TODO need to add logic to wait for new node join in, and then drain old node
 
 			err = n.drainNode(nodename)
