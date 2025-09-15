@@ -64,6 +64,8 @@ func main() {
 
 	eventInformer := kubefactory.Core().V1().Events()
 
+	nodeInformer := kubefactory.Core().V1().Nodes()
+
 	nodeIssueReportInformer := nodeIssueReportFactory.Nodeissuereporter().V1alpha1().NodeIssueReports()
 
 	// nircontroller := controller.NewNIRController(nodeIssueReportInformer)
@@ -75,9 +77,9 @@ func main() {
 
 	eventcontroller.Run(stopcha)
 
-	awspkg.NewAwsOperator()
+	//awsOperator := awspkg.NewAwsOperator(cfg)
 
-	nircontroller := controller.NewNIRController(nodeIssueReportInformer, *nirclient, *clientset, awsOperator)
+	nircontroller := controller.NewNIRController(nodeIssueReportInformer, *nirclient, *clientset, *awsOperator, nodeInformer)
 
 	nircontroller.Run(stopcha)
 
