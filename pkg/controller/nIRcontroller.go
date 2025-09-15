@@ -279,7 +279,12 @@ func (n *NIRController) processNextItem() bool {
 			log.Infoln("New node ready:", newNodeName)
 			// TODO need to add logic to wait for new node join in, and then drain old node
 
-			n.drainNode(nodename)
+			err = n.drainNode(nodename)
+			if err != nil {
+				log.Errorln("fail to drain node:", err)
+				n.queue.AddRateLimited(key)
+				return true
+			}
 
 			log.Infoln("found fatal errors, replaced node:", nodename, "new node name:", newNodeName)
 			return true
