@@ -2,13 +2,7 @@ package controller
 
 import (
 	"context"
-	log "github.com/sirupsen/logrus"
-	v1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/cache"
-	"k8s.io/client-go/util/workqueue"
+	"encoding/json"
 	"strings"
 	"time"
 	awspkg "xingzhan-node-autoreplace/pkg/aws"
@@ -16,9 +10,19 @@ import (
 	nirclient "xingzhan-node-autoreplace/pkg/generated/clientset/versioned"
 	nodeIssueReport "xingzhan-node-autoreplace/pkg/generated/informers/externalversions/nodeIssueReport/v1alpha1"
 
-	informercorev1 "k8s.io/client-go/informers/core/v1"
+	log "github.com/sirupsen/logrus"
+	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/util/workqueue"
+
 	nodeIssueReportv1alpha1 "xingzhan-node-autoreplace/pkg/apis/nodeIssueReport/v1alpha1"
-	nodeIssueReportLister "xingzhan-node-autoreplace/pkg/generated/listers/nodeIssueReport/v1alpha1"
+	nodeIssueReportLister "xingzhan-node-autoreplace/pkg/generated/listers/nodeissuereport/v1alpha1"
+
+	informercorev1 "k8s.io/client-go/informers/core/v1"
+
 	//"k8s.io/kubectl/pkg/drain"
 	policyv1beta1 "k8s.io/api/policy/v1beta1"
 )
@@ -61,6 +65,23 @@ func (n *NIRController) enqueue(obj interface{}) {
 
 func (n *NIRController) nIRAddFunctionHandler(obj interface{}) {
 	n.enqueue(obj)
+}
+
+func (n *NIRController) nIRUpdateFunctionHandler(oldObj, newObj interface{}){
+	oldObjnIrR, err := json.Marshal(oldObj)
+	if err != nil {
+		log.Errorln("failed to Marshal oldobj", err)
+	}
+	log.Infoln("oldObjnIrR: ", string(oldObjnIrR))
+
+
+	newObjnIrR, err := json.Marshal(newObj)
+	if err != nil {
+		log.Errorln("failed to Marshal newobj", newObjnIrR)
+	}
+	log.Infoln("newObjnIrR: ", string(newObjnIrR))
+
+	n.enqueue(newObj)
 }
 
 func (n *NIRController) isNodeReady(node *v1.Node) bool {
@@ -219,7 +240,7 @@ func (n *NIRController) processNextItem() bool {
 	}
 	defer n.queue.Done(key)
 
-	log.Infoln("Processing event: ", key)
+	log.Infoln("Processing object: ", key)
 	namespace, name, err := cache.SplitMetaNamespaceKey(key)
 	if err != nil {
 		log.Errorln("fail to split the key:", key)
@@ -229,6 +250,11 @@ func (n *NIRController) processNextItem() bool {
 
 	nodeIssueReport, err := n.nodeIssueReportLister.NodeIssueReports(namespace).Get(name)
 
+	if err != nil {
+		log.Errorln("failed to get nodeIssueReport resource, process next time", err)
+		n.queue.AddRateLimited(key)
+		return true
+	}
 	nodename := nodeIssueReport.Spec.NodeName
 	problems := nodeIssueReport.Spec.NodeProblems
 
@@ -257,7 +283,11 @@ func (n *NIRController) processNextItem() bool {
 				return true
 			}
 			log.Infoln("successfully rebooted node:", nodename)
-
+			if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Delete(context.TODO(), nodeIssueReport.Spec.NodeName, metav1.DeleteOptions{}); err != nil {
+				log.Errorln("faild to delete nodeIssueReport", nodeIssueReport.Name)
+			}else {
+				log.Infoln("reboot Action done, deleted nodeIssueReport:", nodeIssueReport.Name)
+			}
 			return true
 		} else if nodeIssueReport.Spec.Action == nodeIssueReportv1alpha1.Replace {
 			//TODO aws replace node logic
@@ -303,6 +333,7 @@ func (n *NIRController) processNextItem() bool {
 	// travesal all node problems
 	for problemname, problem := range problems {
 		// get the tolerance config for specific senario
+		log.Infoln("travesal all node problems, current problem", problemname)
 		tolerancecount := n.toleranceConfig.ToleranceCollection[problemname]
 
 		if tolerancecount.Times <= problem.Count {
@@ -310,23 +341,42 @@ func (n *NIRController) processNextItem() bool {
 			toleranceAction := tolerancecount.Action
 			if toleranceAction == config.ActionReboot {
 				nodeIssueReport.Spec.Action = nodeIssueReportv1alpha1.Reboot
-				n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.Background(), nodeIssueReport, metav1.UpdateOptions{})
+				if result, err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.Background(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
+					log.Errorln("failed to update NodeIssueReport:", err)
+				}else {
+					if resultjson, err := json.Marshal(result); err != nil{
+						log.Errorln("failed to Marshal Action Update result", err)
+					}else {
+						log.Debugln("Action Update result", string(resultjson))
+					}
+				}
+				
 				return true
 			} else if toleranceAction == config.ActionReplace {
 				nodeIssueReport.Spec.Action = nodeIssueReportv1alpha1.Replace
-				n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.Background(), nodeIssueReport, metav1.UpdateOptions{})
+				// n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.Background(), nodeIssueReport, metav1.UpdateOptions{})
+				if result, err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.Background(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
+					log.Errorln("failed to update NodeIssueReport:", err)
+				}else {
+					if resultjson, err := json.Marshal(result); err != nil{
+						log.Errorln("failed to Marshal Action Update result", err)
+					}else {
+						log.Debugln("Action Update result", string(resultjson))
+					}
+				}
 				return true
 			}
 
 		}
-		return true
+		// return true
+		
 	}
 
 	return true
 }
 
 func (n *NIRController) worker() {
-
+	log.Infoln("Running NIRcontorller worker")
 	for n.processNextItem() {
 
 	}
@@ -369,7 +419,9 @@ func NewNIRController(nodeIssueReportInformer nodeIssueReport.NodeIssueReportInf
 	nodeIssueReportInformer.Informer().AddEventHandler(
 		cache.ResourceEventHandlerFuncs{
 			AddFunc: n.nIRAddFunctionHandler,
+			UpdateFunc: n.nIRUpdateFunctionHandler,
 		})
+
 	nodeInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		UpdateFunc: n.nodeUpdateHandler,
 	})

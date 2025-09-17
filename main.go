@@ -56,6 +56,7 @@ func main() {
 		log.Error(err)
 	}
 
+	// initialize stopcha
 	stopcha := signal.SetupSignalHandler()
 
 	kubefactory := informers.NewSharedInformerFactory(clientset, time.Minute*0)
@@ -71,17 +72,24 @@ func main() {
 	// nircontroller := controller.NewNIRController(nodeIssueReportInformer)
 	eventcontroller := controller.NewEventController(eventInformer, nodeIssueReportInformer, *clientset, *nirclient)
 
+	nircontroller := controller.NewNIRController(nodeIssueReportInformer, *nirclient, *clientset, *awsOperator, nodeInformer)
 	// stopcha := make(chan struct{})
 
 	kubefactory.Start(stopcha)
+	nodeIssueReportFactory.Start(stopcha)
 
-	eventcontroller.Run(stopcha)
+	go nircontroller.Run(stopcha)
+	go eventcontroller.Run(stopcha)
 
+	<-stopcha
+
+	log.Infoln("Main program received stop signal, shutting down")
 	//awsOperator := awspkg.NewAwsOperator(cfg)
 
-	nircontroller := controller.NewNIRController(nodeIssueReportInformer, *nirclient, *clientset, *awsOperator, nodeInformer)
+	
+	
 
-	nircontroller.Run(stopcha)
+	
 
 	//toleranceColl, err := config.LoadConfiguration()
 	//

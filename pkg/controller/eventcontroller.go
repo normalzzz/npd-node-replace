@@ -22,7 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	nirinformer "xingzhan-node-autoreplace/pkg/generated/informers/externalversions/nodeIssueReport/v1alpha1"
-	nirlister "xingzhan-node-autoreplace/pkg/generated/listers/nodeIssueReport/v1alpha1"
+	nirlister "xingzhan-node-autoreplace/pkg/generated/listers/nodeissuereport/v1alpha1"
 
 	// nodeIssueReport "xingzhan-node-autoreplace/pkg/generated/clientset/versioned/typed/nodeIssueReport/v1alpha1"
 	// v1alpha1 "xingzhan-node-autoreplace/pkg/generated/informers/externalversions/nodeIssueReport/v1alpha1"
@@ -145,11 +145,13 @@ func (c *EventController) processNextItem() bool {
 	if errors.IsNotFound(err) {
 		log.Infoln("no node issue report found for the node: ", nodename)
 		nodeissuereport := constructNodeIssueReport(event)
+		
 
 		_, err = c.nirclient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Create(context.Background(), &nodeissuereport, metav1.CreateOptions{})
 		if err != nil {
 			log.Errorln("failed to create node issue report", err)
 		}
+		log.Infoln("constructed node Issue Report object")
 		return true
 	}
 
@@ -207,6 +209,26 @@ func (c *EventController) enqueu(obj interface{}) {
 	c.queue.Add(eventkey)
 
 }
+
+func (c *EventController) eventUpadteHandler(oldObj, newObj interface{}){
+	newevent, ok := newObj.(*corev1.Event)
+	if !ok {
+		log.Errorln("faile to get new event obj")
+		return
+	}
+
+	if !isNodeProblemDetectorEvent(newevent) {
+		return
+	}
+
+	if eventjson, err := json.Marshal(newevent); err != nil {
+		log.Errorln("failed to marshal update new event to json", err)
+	} else {
+		log.Infoln("recieved update new events: \n", string(eventjson))
+	}
+	c.enqueu(newevent)
+}
+
 
 func (c *EventController) eventAddHandler(obj interface{}) {
 	event, ok := obj.(*corev1.Event)
@@ -287,6 +309,7 @@ func NewEventController(eventInformer informercorev1.EventInformer, nodeIssueRep
 
 	c.EventInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: c.eventAddHandler,
+		UpdateFunc: c.eventUpadteHandler,
 	})
 	// Add your event handlers here, e.g. for add, update, delete events.
 

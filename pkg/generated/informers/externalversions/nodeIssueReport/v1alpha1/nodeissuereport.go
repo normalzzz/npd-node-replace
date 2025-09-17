@@ -24,7 +24,7 @@ import (
 	apisnodeIssueReportv1alpha1 "xingzhan-node-autoreplace/pkg/apis/nodeIssueReport/v1alpha1"
 	versioned "xingzhan-node-autoreplace/pkg/generated/clientset/versioned"
 	internalinterfaces "xingzhan-node-autoreplace/pkg/generated/informers/externalversions/internalinterfaces"
-	nodeIssueReportv1alpha1 "xingzhan-node-autoreplace/pkg/generated/listers/nodeIssueReport/v1alpha1"
+	nodeIssueReportv1alpha1 "xingzhan-node-autoreplace/pkg/generated/listers/nodeissuereport/v1alpha1"
 
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
