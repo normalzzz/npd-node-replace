@@ -324,7 +324,12 @@ func (n *NIRController) processNextItem() bool {
 				return true
 			}
 
-			log.Infoln("found fatal errors, replaced node:", nodename, "new node name:", newNodeName)
+			log.Infoln("found fatal errors, successfully replaced node:", nodename, "new node name:", newNodeName)
+			if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Delete(context.TODO(), nodeIssueReport.Spec.NodeName, metav1.DeleteOptions{}); err != nil {
+				log.Errorln("faild to delete nodeIssueReport", nodeIssueReport.Name)
+			}else {
+				log.Infoln("replace Action done, deleted nodeIssueReport:", nodeIssueReport.Name)
+			}
 			return true
 		}
 
