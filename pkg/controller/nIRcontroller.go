@@ -318,6 +318,7 @@ func (n *NIRController) processNextItem() bool {
 			}
 
 			// TODO need to add logic to wait for new node join in, and then drain old node
+			// DONE
 
 			err = n.drainNode(nodename)
 			if err != nil {
