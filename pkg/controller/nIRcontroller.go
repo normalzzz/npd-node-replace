@@ -283,6 +283,8 @@ func (n *NIRController) processNextItem() bool {
 				return true
 			}
 			log.Infoln("successfully rebooted node:", nodename)
+
+			// TODO: add function to notice user what happened, for investigating root cause
 			if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Delete(context.TODO(), nodeIssueReport.Spec.NodeName, metav1.DeleteOptions{}); err != nil {
 				log.Errorln("faild to delete nodeIssueReport", nodeIssueReport.Name)
 			}else {
@@ -325,6 +327,7 @@ func (n *NIRController) processNextItem() bool {
 			}
 
 			log.Infoln("found fatal errors, successfully replaced node:", nodename, "new node name:", newNodeName)
+			// TODO: add function to notice user what happened, for investigating root cause
 			if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Delete(context.TODO(), nodeIssueReport.Spec.NodeName, metav1.DeleteOptions{}); err != nil {
 				log.Errorln("faild to delete nodeIssueReport", nodeIssueReport.Name)
 			}else {
