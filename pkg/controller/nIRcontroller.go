@@ -400,6 +400,7 @@ func (n *NIRController) Run(stopch <-chan struct{}) {
 	}
 
 	<-stopch
+	// TODO delete all the NodeIssueReport resources
 	log.Infoln("Shutting down NIRController")
 	close(newNodeChan)
 

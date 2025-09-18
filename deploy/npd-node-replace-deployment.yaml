@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  creationTimestamp: null
+  labels:
+    app: npd-node-replace
+  name: npd-node-replace
+  namespace: kube-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: npd-node-replace
+  strategy: {}
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        app: npd-node-replace
+    spec:
+      containers:
+      - image: 442337510176.dkr.ecr.cn-north-1.amazonaws.com.cn/zxxxx/npd-node-replace:v1
+        name: npd-node-replace
+        resources: {}
+status: {}

@@ -307,6 +307,7 @@ func NewEventController(eventInformer informercorev1.EventInformer, nodeIssueRep
 		nirclient:               nirclient,
 	}
 
+	// TODO add Fliter function , only pass the events concerning non-karpenter nodes and happened after eventcontroller started
 	c.EventInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: c.eventAddHandler,
 		UpdateFunc: c.eventUpadteHandler,
