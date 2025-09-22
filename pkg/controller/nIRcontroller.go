@@ -49,7 +49,7 @@ type NIRController struct {
 }
 
 func init() {
-	newNodeChan = make(chan string, 10) // 带缓冲 channel，防止阻塞
+	newNodeChan = make(chan string, 10) 
 }
 
 func (n *NIRController) enqueue(obj interface{}) {

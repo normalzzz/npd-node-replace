@@ -70,7 +70,7 @@ func main() {
 	nodeIssueReportInformer := nodeIssueReportFactory.Nodeissuereporter().V1alpha1().NodeIssueReports()
 
 	// nircontroller := controller.NewNIRController(nodeIssueReportInformer)
-	eventcontroller := controller.NewEventController(eventInformer, nodeIssueReportInformer, *clientset, *nirclient)
+	eventcontroller := controller.NewEventController(eventInformer, nodeIssueReportInformer, *clientset, *nirclient, nodeInformer)
 
 	nircontroller := controller.NewNIRController(nodeIssueReportInformer, *nirclient, *clientset, *awsOperator, nodeInformer)
 	// stopcha := make(chan struct{})
@@ -86,19 +86,5 @@ func main() {
 	log.Infoln("Main program received stop signal, shutting down")
 	//awsOperator := awspkg.NewAwsOperator(cfg)
 
-	
-	
-
-	
-
-	//toleranceColl, err := config.LoadConfiguration()
-	//
-	//if err != nil {
-	//	fmt.Println(err)
-	//}
-	//
-	//marshal, err := json.Marshal(toleranceColl)
-	//
-	//fmt.Println(string(marshal), err)
 
 }

@@ -38,6 +38,8 @@ type EventController struct {
 	// Add fields here for your controller's state, e.g. clientsets, informers, listers, etc.
 	EventInformer informercorev1.EventInformer
 
+	NodeLister listercorev1.NodeLister
+
 	queue workqueue.TypedRateLimitingInterface[string]
 
 	EventLister listercorev1.EventLister
@@ -49,6 +51,8 @@ type EventController struct {
 	kubeclient kubernetes.Clientset
 
 	nirclient nirclient.Clientset
+
+	controllerStartTime metav1.Time
 }
 
 func constructNodeIssueReport(event *corev1.Event) nodeIssueReportv1alpha1.NodeIssueReport {
@@ -217,7 +221,7 @@ func (c *EventController) eventUpadteHandler(oldObj, newObj interface{}){
 		return
 	}
 
-	if !isNodeProblemDetectorEvent(newevent) {
+	if !c.isNodeProblemDetectorEvent(newevent) {
 		return
 	}
 
@@ -238,7 +242,7 @@ func (c *EventController) eventAddHandler(obj interface{}) {
 	}
 
 	// only enqueue node-problem-detector node anomaly events
-	if !isNodeProblemDetectorEvent(event) {
+	if !c.isNodeProblemDetectorEvent(event) {
 		return
 	}
 
@@ -263,14 +267,37 @@ func (c *EventController) eventAddHandler(obj interface{}) {
 
 // isNodeProblemDetectorEvent checks whether the event comes from node-problem-detector
 // (or its monitors) and targets a Node.
-func isNodeProblemDetectorEvent(e *corev1.Event) bool {
+func (c *EventController) isNodeProblemDetectorEvent(e *corev1.Event) bool {
 	if e == nil {
+		return false
+	}
+
+	// Done added event filter based on time, ignore the events happened before controller started
+	if e.LastTimestamp.Before(&c.controllerStartTime){
+		log.Infoln("event happened before controller start, ignored event", e.Name)
 		return false
 	}
 
 	if e.InvolvedObject.Kind != "Node" {
 		return false
 	}
+
+	// Done: check if node is handled by karpenter
+	nodename := e.InvolvedObject.Name
+	
+	nodeobj, err := c.NodeLister.Get(nodename)
+	if err != nil {
+		log.Error("failed to get the node object when try to determain whether node is managed by karpenter")
+		return false
+	}
+	for _, nodeowner := range nodeobj.OwnerReferences {
+		if nodeowner.Kind == "NodeClaim" {
+			log.Infoln("recieved node problem event, but node", nodename, "is handled by karpenter, thus ignore this event")
+			return false
+		}
+	}
+
+
 
 	component := e.Source.Component
 	if component == "" {
@@ -295,23 +322,28 @@ func isNodeProblemDetectorEvent(e *corev1.Event) bool {
 	return false
 }
 
-func NewEventController(eventInformer informercorev1.EventInformer, nodeIssueReportInformer nirinformer.NodeIssueReportInformer, kubeclient kubernetes.Clientset, nirclient nirclient.Clientset) *EventController {
+func NewEventController(eventInformer informercorev1.EventInformer, nodeIssueReportInformer nirinformer.NodeIssueReportInformer, kubeclient kubernetes.Clientset, nirclient nirclient.Clientset, nodeInformer informercorev1.NodeInformer) *EventController {
 
 	c := EventController{
 		EventInformer:           eventInformer,
+		NodeLister: nodeInformer.Lister(),
 		nodeIssueReportInformer: nodeIssueReportInformer,
 		queue:                   workqueue.NewTypedRateLimitingQueue(workqueue.NewTypedItemExponentialFailureRateLimiter[string](1*time.Second, 30*time.Second)),
 		EventLister:             eventInformer.Lister(),
 		nodeIssueReportLister:   nodeIssueReportInformer.Lister(),
 		kubeclient:              kubeclient,
 		nirclient:               nirclient,
+		controllerStartTime: metav1.Time{Time: time.Now()},
 	}
-
 	// TODO add Fliter function , only pass the events concerning non-karpenter nodes and happened after eventcontroller started
 	c.EventInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: c.eventAddHandler,
 		UpdateFunc: c.eventUpadteHandler,
 	})
+
+	// c.EventInformer.Informer().AddEventHandler(cache.FilteringResourceEventHandler{
+	// 	FilterFunc: ,
+	// })
 	// Add your event handlers here, e.g. for add, update, delete events.
 
 	return &c
