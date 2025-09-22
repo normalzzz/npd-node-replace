@@ -30,7 +30,7 @@ import (
 
 const workercount = 3
 
-var tolerance config.Tolerance
+// var tolerance config.Tolerance
 
 var newNodeChan chan string
 
@@ -129,7 +129,7 @@ func (n *NIRController) nodeUpdateHandler(oldObj interface{}, newObj interface{}
 		log.Infoln("New node joined and ready:", newNodeObj.Name)
 		select {
 		case newNodeChan <- newNodeObj.Name:
-			log.Infoln("Sent node %s to newNodeChan", newNodeObj.Name)
+			log.Infoln("Sent node  to newNodeChan", newNodeObj.Name)
 		default:
 			log.Warningf("newNodeChan blocked, failed to send %s", newNodeObj.Name)
 		}
@@ -145,7 +145,7 @@ func (n *NIRController) cordonNode(nodename string) error {
 		return err
 	}
 	if nodeobj.Spec.Unschedulable {
-		log.Infoln("Node %s is already unschedulable", nodename)
+		log.Infoln("Node  is already unschedulable", nodename)
 		return nil
 	}
 	nodeobj.Spec.Unschedulable = true
@@ -434,7 +434,7 @@ func (n *NIRController) Run(stopch <-chan struct{}) {
 	//	log.Fatal("failed to load tolerance configuration", err)
 	//}
 
-	for i := 0; i < workerCount; i++ {
+	for i := 0; i < workercount; i++ {
 		go wait.Until(n.worker, time.Second, stopch)
 	}
 
