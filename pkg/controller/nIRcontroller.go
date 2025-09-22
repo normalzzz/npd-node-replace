@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"time"
 	awspkg "xingzhan-node-autoreplace/pkg/aws"
@@ -46,6 +47,9 @@ type NIRController struct {
 	kubeclient            kubernetes.Clientset
 	awsOperator           awspkg.AwsOperator
 	nodeInformer          informercorev1.NodeInformer
+	selfpodname string
+	selfpodnamespace string
+	selfnodename string
 }
 
 func init() {
@@ -196,6 +200,17 @@ func (n *NIRController) isDaemonset(pod v1.Pod) bool {
 	}
 	return false
 }
+
+func (n *NIRController) isSelfPod(pod v1.Pod) bool{
+
+	if pod.Name == n.selfpodname && pod.Namespace == n.selfpodnamespace && pod.Spec.NodeName == n.selfnodename {
+		log.Info("controller itself pod, skipped")
+		return true
+	}
+	return false
+
+}
+
 func (n *NIRController) drainNode(nodename string) error {
 
 	//1. cordon node
@@ -220,7 +235,7 @@ func (n *NIRController) drainNode(nodename string) error {
 		//if pod.ObjectMeta.OwnerReferences != "DaemonSet" {
 		//	n.evictPod(pod)
 		//}
-		if !n.isDaemonset(pod) {
+		if !n.isDaemonset(pod) && !n.isSelfPod(pod) {
 			err := n.evictPod(pod)
 			if err != nil {
 				log.Errorln("failed to evict pod when trying to evict pod", pod.Name, pod.Namespace, err)
@@ -285,6 +300,9 @@ func (n *NIRController) processNextItem() bool {
 			log.Infoln("successfully rebooted node:", nodename)
 
 			// TODO: add function to notice user what happened, for investigating root cause
+			if err := n.awsOperator.SNSNotify(*nodeIssueReport); err != nil {
+				log.Error("failed to notify admin when reboot node", err)
+			}
 			if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Delete(context.TODO(), nodeIssueReport.Spec.NodeName, metav1.DeleteOptions{}); err != nil {
 				log.Errorln("faild to delete nodeIssueReport", nodeIssueReport.Name)
 			}else {
@@ -329,10 +347,27 @@ func (n *NIRController) processNextItem() bool {
 
 			log.Infoln("found fatal errors, successfully replaced node:", nodename, "new node name:", newNodeName)
 			// TODO: add function to notice user what happened, for investigating root cause
+			if err := n.awsOperator.SNSNotify(*nodeIssueReport); err != nil {
+				log.Error("failed to notify admin when replace node", err)
+			}
 			if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Delete(context.TODO(), nodeIssueReport.Spec.NodeName, metav1.DeleteOptions{}); err != nil {
 				log.Errorln("faild to delete nodeIssueReport", nodeIssueReport.Name)
 			}else {
 				log.Infoln("replace Action done, deleted nodeIssueReport:", nodeIssueReport.Name)
+			}
+
+			// TODO when the issue node is where controller pod reside on , add logic to handle self pod, these logs maybe never output
+			// Warning this section may not work as expect!!!!! need more test and modify!!!
+			if nodeIssueReport.Name == n.selfnodename {
+
+				if err := n.kubeclient.CoreV1().Nodes().Delete(context.TODO(), n.selfnodename, metav1.DeleteOptions{}); err != nil {
+					log.Errorln("when trying to delete self node, error happened:", err)
+				}
+				if err := n.kubeclient.CoreV1().Pods(n.selfpodnamespace).Delete(context.TODO(), n.selfpodname, metav1.DeleteOptions{}); err != nil {
+					log.Errorln("when trying to delete self pod:", n.selfpodnamespace, n.selfpodname,"failed with error:", err)
+				}else {
+					log.Infoln("deleted self pod when replace the issue node")
+				}
 			}
 			return true
 		}
@@ -424,6 +459,9 @@ func NewNIRController(nodeIssueReportInformer nodeIssueReport.NodeIssueReportInf
 		kubeclient:              kubeclient,
 		awsOperator:             awsOperator,
 		nodeInformer:            nodeInformer,
+		selfpodname: os.Getenv("SELF_POD_NAME"),
+		selfpodnamespace: os.Getenv("SELF_POD_NAMESPACE"),
+		selfnodename: os.Getenv("SELF_NODE_NAME"),
 	}
 
 	nodeIssueReportInformer.Informer().AddEventHandler(

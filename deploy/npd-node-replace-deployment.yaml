@@ -21,5 +21,20 @@ spec:
       containers:
       - image: 442337510176.dkr.ecr.cn-north-1.amazonaws.com.cn/zxxxx/npd-node-replace:v1
         name: npd-node-replace
+        env:
+        - name: SELF_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: SELF_POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: SELF_NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: SNS_TOPIC_ARN
+          value: "<Amazon SNS topic arn replaced with yours>"
         resources: {}
 status: {}

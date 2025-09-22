@@ -4,16 +4,23 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/service/sns"
 	log "github.com/sirupsen/logrus"
+
 	//"github.com/aws/aws-sdk-go-v2/aws"
+	nodeIssueReportv1alpha1 "xingzhan-node-autoreplace/pkg/apis/nodeIssueReport/v1alpha1"
+
 	"github.com/aws/aws-sdk-go-v2/service/autoscaling"
 )
 
 type AwsOperator struct {
 	ec2client *ec2.Client
 	asgclient *autoscaling.Client
+	snscli *sns.Client
 }
 
 var boolvar = false
@@ -87,12 +94,38 @@ func (a *AwsOperator) GetASGId(instanceid string) (string, error) {
 	//return ""
 }
 
+
+func (a *AwsOperator) SNSNotify( nodeissuereport nodeIssueReportv1alpha1.NodeIssueReport) error{
+	snstopic := os.Getenv("SNS_TOPIC_ARN")
+	nodeissuereportjson, err  := json.Marshal(nodeissuereport)
+	nodeissuereportmessage := string(nodeissuereportjson)
+	if err != nil{
+		log.Error("when trying to notify admin with sns, Marshal nodeissuereport with error: ", err)
+		return err
+	}
+	snspublistInput := sns.PublishInput{
+		TopicArn: &snstopic,
+		Message: &nodeissuereportmessage,
+	}
+	_, err = a.snscli.Publish(context.TODO(), &snspublistInput)
+
+	if err != nil {
+		log.Errorln("failed to send email message to SNS topic with error", err)
+		return err
+	}
+	return nil
+
+
+}
+
 func NewAwsOperator(config aws.Config) *AwsOperator {
 
 	ec2cli := ec2.NewFromConfig(config)
 	asgcli := autoscaling.NewFromConfig(config)
+	snscli := sns.NewFromConfig(config)
 	return &AwsOperator{
 		ec2client: ec2cli,
 		asgclient: asgcli,
+		snscli: snscli,
 	}
 }

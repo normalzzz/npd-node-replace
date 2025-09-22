@@ -57,6 +57,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.31.8
 	github.com/aws/aws-sdk-go-v2/service/autoscaling v1.59.1
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.251.2
+	github.com/aws/aws-sdk-go-v2/service/sns v1.38.3
 	k8s.io/code-generator v0.0.0-20250910160402-a7d91fd1ce23
 )
 
