@@ -18,7 +18,7 @@ spec:
     spec:
       serviceAccount: npd-node-replace-sa
       containers:
-      - image: 073070604328.dkr.ecr.cn-north-1.amazonaws.com.cn/zxxxx/npd-node-replace:v1
+      - image: <image_url>
         name: npd-node-replace
         imagePullPolicy: Always
         volumeMounts:
