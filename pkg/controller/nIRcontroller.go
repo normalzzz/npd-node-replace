@@ -369,6 +369,7 @@ func (n *NIRController) processNextItem() bool {
 					log.Infoln("deleted self pod when replace the issue node")
 				}
 			}
+			// TODO: need add logic to delete none-self node resource
 			return true
 		}
 
