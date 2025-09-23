@@ -58,11 +58,21 @@ AutoScalingFullAccess
 
 IRSA 的创建方式您可以参考： https://docs.amazonaws.cn/eks/latest/userguide/iam-roles-for-service-accounts.html
 
-### 环境变量配置：
+
+### npd-node-replace-deployment.yaml 配置：
+#### 环境变量配置：
 在 [npd-node-replace-deployment.yaml](https://github.com/normalzzz/npd-node-replace/blob/main/deploy/npd-node-replace-deployment.yaml) 中您需要在 Deployment.spec.template.spec.env 的如下环境变量中添加 SNS Topic ARN:
 ```yaml
         - name: SNS_TOPIC_ARN
           value: <amazon sns topic arn>
+```
+
+#### image url 配置：
+需要在如下 Deployment.spec.template.containers["npd-node-replace"].image 部分替换为您之前创建的容器镜像 URL：
+```yaml
+      containers:
+      - image: <image_url>
+        name: npd-node-replace
 ```
 
 ### 部署模板：
