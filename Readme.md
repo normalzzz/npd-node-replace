@@ -5,7 +5,9 @@ npd-node-replace 的主要功能如下：
 2. 将节点的问题事件记录在 NodeIssueReport 中
 3. 根据用户配置的 [Tolerance 配置](https://github.com/normalzzz/npd-node-replace/blob/main/pkg/config/tolerance.json) 进行节点的自动替换或重启
 4. 通知集群 Admin 节点上发生的历史问题事件
-**重要**： 
+
+
+## **重要**： 
 - npd-node-replace 组件仅侦听 EKS 托管节点组中节点的事件， 不会处理 Karpenter 节点问题
 - npd-node-replace 组件属于个人项目，并不属于 Amazon Web Service 中国区，如果遇到问题请提交 [Issue](https://github.com/normalzzz/npd-node-replace/issues), issue 会被及时处理
 - npd-node-replace 组件当前仍处于测试开发阶段，请在详尽的测试和考虑之后使用在 EKS 集群中。
