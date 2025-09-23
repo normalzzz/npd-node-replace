@@ -3,6 +3,7 @@ npd-node-replace 的主要功能如下：
 1. 侦听来自 npd 的关于节点问题的报告事件
 2. 将节点的问题事件记录在 NodeIssueReport 中
 3. 根据用户配置的 [Tolerance 配置](https://github.com/normalzzz/npd-node-replace/blob/main/pkg/config/tolerance.json) 进行节点的自动替换或重启
+4. 通知集群 Admin 节点上发生的历史问题事件
 
 ## 整体架构：
 ![structure](./npd-node-replace.png)
