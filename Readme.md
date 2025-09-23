@@ -7,21 +7,16 @@ npd-node-replace 的主要功能如下：
 ## 整体架构：
 ![structure](./npd-node-replace.png)
 
+## 镜像构建：
+您可以使用如下命令进行镜像构建，并将镜像推送到镜像仓库，例如 [Amazon ECR](https://docs.amazonaws.cn/AmazonECR/latest/userguide/docker-push-ecr-image.html) 
+```bash
+docker build -t npd-node-replace .
+```
+
 # 部署
 **npd-node-place 依赖 node-problem-detector 组件侦听事件，请先部署 [node-problem-detector](https://github.com/kubernetes/node-problem-detector?tab=readme-ov-file#installation)**
 
-## 创建 service account、clusterole、clusterrolebinding
-```bash
-kubectl apply -f deploy/npd-node-replace-clusterrole.yaml
-kubectl apply -f deploy/npd-node-replace-sa.yaml
-kubectl apply -f deploy/npd-node-replace-clusterrolebinding.yaml
-```
-## 部署 
-```bash
-kubectl apply -f deploy/npd-node-replace-deployment.yaml
-```
-镜像地址：442337510176.dkr.ecr.cn-north-1.amazonaws.com.cn/zxxxx/npd-node-replace:v1
-### Tolerance 配置：
+## Tolerance 配置：
 Tolerance 配置中可以配置对于某些问题发生问题的容忍次数，示例配置：
 ```json
 {
@@ -43,7 +38,8 @@ Tolerance 配置中可以配置对于某些问题发生问题的容忍次数，�
 根据您的 Tolerance 配置需要修改 [tolerance configmap](https://github.com/normalzzz/npd-node-replace/blob/main/deploy/tolerance-configmap.yaml)
 
 ### 权限配置：
-您需要创建 [IRSA](https://docs.amazonaws.cn/eks/latest/userguide/iam-roles-for-service-accounts.html) 的方式为 npd-node-replace pod 赋予 Amazon Web Services 权限。
+npd-node-replace 组件需要结合 Amazon EC2、Amazon Autoscaling group 、Amazon SNS 服务，您需要为其配置权限。 
+建议通过 [IRSA](https://docs.amazonaws.cn/eks/latest/userguide/iam-roles-for-service-accounts.html) 的方式为 npd-node-replace pod 赋予 Amazon Web Services 权限。
 修改 sevice account 配置清单，添加与 IAM role 的关联，如下，您需要将  <irsa iam role arn> 部分替换为 IRSA role arn。
 ```
 apiVersion: v1
@@ -60,17 +56,32 @@ AmazonEC2FullAccess
 AmazonSNSFullAccess
 AutoScalingFullAccess
 
+IRSA 的创建方式您可以参考： https://docs.amazonaws.cn/eks/latest/userguide/iam-roles-for-service-accounts.html
+
+### 环境变量配置：
+在 [npd-node-replace-deployment.yaml](https://github.com/normalzzz/npd-node-replace/blob/main/deploy/npd-node-replace-deployment.yaml) 中您需要在 Deployment.spec.template.spec.env 的如下环境变量中添加 SNS Topic ARN:
+```yaml
+        - name: SNS_TOPIC_ARN
+          value: <amazon sns topic arn>
+```
+
 ### 部署模板：
-- 使用 kubectl apply 模板：
+1. 部署 CRD：
+```bash
+kubectl apply -f config/crd/nodeissuereporter.xingzhan.io_nodeissuereports.yaml
+```
+2. 使用 kubectl apply 模板：
 ```bash
 kubectl apply -f deploy/npd-node-replace-clusterrole.yaml
 kubectl apply -f deploy/npd-node-replace-clusterrolebinding.yaml
-kubectl apply -f deploy/npd-node-replace-deployment.yaml
 kubectl apply -f deploy/npd-node-replace-sa.yaml
 kubectl apply -f deploy/tolerance-configmap.yaml
+kubectl apply -f deploy/npd-node-replace-deployment.yaml
 ```
+TODO： Helm 部署
 
-## 测试：
+
+# 测试：
 可以使用如下方式注入实例系统问题：
 OOMKilling 问题模拟：
 ```bash
@@ -83,3 +94,4 @@ echo "<1>BUG: unable to handle kernel NULL pointer dereference at 0x00000000" | 
 echo "<1>divide error: 0000 [#1] SMP" | sudo tee /dev/kmsg
 ```
 
+根据仓库中的[示例配置](https://github.com/normalzzz/npd-node-replace/blob/main/deploy/tolerance-configmap.yaml)，在使用上述方式触发两次 OOMKilling 事件之后，会发生节点重启。 触发三次 KernelOops 事件之后，会发生节点替换。且在节点重启和替换之后，在 [npd-node-replace-deployment.yaml](https://github.com/normalzzz/npd-node-replace/blob/main/deploy/npd-node-replace-deployment.yaml) 中配置的 SNS topic 会受到邮件提醒，通知节点发生过的历史问题。
