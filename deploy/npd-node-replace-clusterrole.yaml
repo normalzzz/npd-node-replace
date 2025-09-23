@@ -16,6 +16,7 @@ rules:
   - ""
   resources:
   - nodes
+  - pods
   verbs:
   - get
   - list
@@ -23,7 +24,7 @@ rules:
   - delete
   - update
 - apiGroups:
-  - "nodeissuereporter.xingzhan.io/v1alpha1"
+  - "nodeissuereporter.xingzhan.io"
   resources:
   - nodeissuereports
   verbs:

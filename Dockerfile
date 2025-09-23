@@ -1,15 +1,21 @@
-FROM public.ecr.aws/docker/library/golang:1.24.5 as builder
+FROM public.ecr.aws/docker/library/golang:alpine as builder
+
+RUN go env -w CGO_ENABLED=0
 
 WORKDIR /app
+
+COPY go.mod go.sum ./
+
+RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 go build -o npd-node-replace main.go
+RUN go build -trimpath -ldflags "-s -w -extldflags '-static -fpic'"  -o npd-node-replace main.go
 
-FROM public.ecr.aws/docker/library/alpine:3.20
+FROM public.ecr.aws/docker/library/alpine
 
 WORKDIR /app
 
-COPY --from=builder /app/npd-node-replace .
+COPY --from=builder --chmod=755 /app/npd-node-replace /app/npd-node-replace
 
-CMD ["./npd-node-replace"]
+ENTRYPOINT ["/app/npd-node-replace"]

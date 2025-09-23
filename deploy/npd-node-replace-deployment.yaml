@@ -1,7 +1,6 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  creationTimestamp: null
   labels:
     app: npd-node-replace
   name: npd-node-replace
@@ -14,13 +13,19 @@ spec:
   strategy: {}
   template:
     metadata:
-      creationTimestamp: null
       labels:
         app: npd-node-replace
     spec:
+      serviceAccount: npd-node-replace-sa
       containers:
-      - image: 442337510176.dkr.ecr.cn-north-1.amazonaws.com.cn/zxxxx/npd-node-replace:v1
+      - image: 073070604328.dkr.ecr.cn-north-1.amazonaws.com.cn/zxxxx/npd-node-replace:v1
         name: npd-node-replace
+        imagePullPolicy: Always
+        volumeMounts:
+        - name: config-volume
+          mountPath: "/app/tolerance.json"
+          subPath: "tolerance.json"
+          readOnly: true
         env:
         - name: SELF_POD_NAME
           valueFrom:
@@ -35,6 +40,8 @@ spec:
             fieldRef:
               fieldPath: spec.nodeName
         - name: SNS_TOPIC_ARN
-          value: "<Amazon SNS topic arn replaced with yours>"
-        resources: {}
-status: {}
+          value: "arn:aws-cn:sns:cn-north-1:073070604328:zhxingcm-ec2-cpu-utilize-topic"
+      volumes:
+      - name: config-volume
+        configMap:
+          name: tolerance-config

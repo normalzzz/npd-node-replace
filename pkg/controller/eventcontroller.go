@@ -19,10 +19,11 @@ import (
 	"k8s.io/client-go/util/workqueue"
 
 	"context"
-	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	nirinformer "xingzhan-node-autoreplace/pkg/generated/informers/externalversions/nodeIssueReport/v1alpha1"
 	nirlister "xingzhan-node-autoreplace/pkg/generated/listers/nodeissuereport/v1alpha1"
+
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	// nodeIssueReport "xingzhan-node-autoreplace/pkg/generated/clientset/versioned/typed/nodeIssueReport/v1alpha1"
 	// v1alpha1 "xingzhan-node-autoreplace/pkg/generated/informers/externalversions/nodeIssueReport/v1alpha1"
@@ -67,7 +68,7 @@ func constructNodeIssueReport(event *corev1.Event) nodeIssueReportv1alpha1.NodeI
 
 	nodeprolems := make(map[string]nodeIssueReportv1alpha1.ProblemRecord)
 	nodeprolems[event.Reason] = nodeIssueReportv1alpha1.ProblemRecord{
-		Count:   event.Count,
+		Count:   1,
 		Message: []string{event.Message},
 	}
 
@@ -95,13 +96,13 @@ func (c *EventController) updateNodeIssueReport(nodeissuereport *nodeIssueReport
 
 	nodeprolems, exist := nodeissuereport.Spec.NodeProblems[event.Reason]
 	if exist {
-		nodeprolems.Count = event.Count
+		nodeprolems.Count += 1
 		nodeprolems.Message = append(nodeprolems.Message, event.Message)
 		nodeissuereport.Spec.NodeProblems[event.Reason] = nodeprolems
 	} else {
 
 		nodeissuereport.Spec.NodeProblems[event.Reason] = nodeIssueReportv1alpha1.ProblemRecord{
-			Count:   event.Count,
+			Count:   1,
 			Message: []string{event.Message},
 		}
 	}
@@ -149,7 +150,6 @@ func (c *EventController) processNextItem() bool {
 	if errors.IsNotFound(err) {
 		log.Infoln("no node issue report found for the node: ", nodename)
 		nodeissuereport := constructNodeIssueReport(event)
-		
 
 		_, err = c.nirclient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Create(context.Background(), &nodeissuereport, metav1.CreateOptions{})
 		if err != nil {
@@ -214,7 +214,7 @@ func (c *EventController) enqueu(obj interface{}) {
 
 }
 
-func (c *EventController) eventUpadteHandler(oldObj, newObj interface{}){
+func (c *EventController) eventUpadteHandler(oldObj, newObj interface{}) {
 	newevent, ok := newObj.(*corev1.Event)
 	if !ok {
 		log.Errorln("faile to get new event obj")
@@ -232,7 +232,6 @@ func (c *EventController) eventUpadteHandler(oldObj, newObj interface{}){
 	}
 	c.enqueu(newevent)
 }
-
 
 func (c *EventController) eventAddHandler(obj interface{}) {
 	event, ok := obj.(*corev1.Event)
@@ -273,7 +272,7 @@ func (c *EventController) isNodeProblemDetectorEvent(e *corev1.Event) bool {
 	}
 
 	// Done added event filter based on time, ignore the events happened before controller started
-	if e.LastTimestamp.Before(&c.controllerStartTime){
+	if e.LastTimestamp.Before(&c.controllerStartTime) {
 		log.Infoln("event happened before controller start, ignored event", e.Name)
 		return false
 	}
@@ -284,7 +283,7 @@ func (c *EventController) isNodeProblemDetectorEvent(e *corev1.Event) bool {
 
 	// Done: check if node is handled by karpenter
 	nodename := e.InvolvedObject.Name
-	
+
 	nodeobj, err := c.NodeLister.Get(nodename)
 	if err != nil {
 		log.Error("failed to get the node object when try to determain whether node is managed by karpenter")
@@ -296,8 +295,6 @@ func (c *EventController) isNodeProblemDetectorEvent(e *corev1.Event) bool {
 			return false
 		}
 	}
-
-
 
 	component := e.Source.Component
 	if component == "" {
@@ -326,18 +323,18 @@ func NewEventController(eventInformer informercorev1.EventInformer, nodeIssueRep
 
 	c := EventController{
 		EventInformer:           eventInformer,
-		NodeLister: nodeInformer.Lister(),
+		NodeLister:              nodeInformer.Lister(),
 		nodeIssueReportInformer: nodeIssueReportInformer,
 		queue:                   workqueue.NewTypedRateLimitingQueue(workqueue.NewTypedItemExponentialFailureRateLimiter[string](1*time.Second, 30*time.Second)),
 		EventLister:             eventInformer.Lister(),
 		nodeIssueReportLister:   nodeIssueReportInformer.Lister(),
 		kubeclient:              kubeclient,
 		nirclient:               nirclient,
-		controllerStartTime: metav1.Time{Time: time.Now()},
+		controllerStartTime:     metav1.Time{Time: time.Now()},
 	}
 	// TODO add Fliter function , only pass the events concerning non-karpenter nodes and happened after eventcontroller started
 	c.EventInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc: c.eventAddHandler,
+		AddFunc:    c.eventAddHandler,
 		UpdateFunc: c.eventUpadteHandler,
 	})
 
