@@ -53,9 +53,9 @@ metadata:
   namespace: kube-system
 ```
 IAM role 的权限配置：您可以使用如下 Managed Policy：
-AmazonEC2FullAccess
-AmazonSNSFullAccess
-AutoScalingFullAccess
+[AmazonEC2FullAccess](https://docs.aws.amazon.com/zh_cn/aws-managed-policy/latest/reference/AmazonEC2FullAccess.html)
+[AmazonSNSFullAccess](https://docs.aws.amazon.com/zh_cn/aws-managed-policy/latest/reference/AmazonSNSFullAccess.html)
+[AutoScalingFullAccess](https://docs.aws.amazon.com/zh_cn/aws-managed-policy/latest/reference/AutoScalingFullAccess.html)
 
 IRSA 的创建方式您可以参考： https://docs.amazonaws.cn/eks/latest/userguide/iam-roles-for-service-accounts.html
 
