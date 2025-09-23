@@ -113,3 +113,11 @@ echo "<1>divide error: 0000 [#1] SMP" | sudo tee /dev/kmsg
 ```
 
 根据仓库中的[示例配置](https://github.com/normalzzz/npd-node-replace/blob/main/deploy/tolerance-configmap.yaml)，在使用上述方式触发两次 OOMKilling 事件之后，会发生节点重启。 触发三次 KernelOops 事件之后，会发生节点替换。且在节点重启和替换之后，在 [npd-node-replace-deployment.yaml](https://github.com/normalzzz/npd-node-replace/blob/main/deploy/npd-node-replace-deployment.yaml) 中配置的 SNS topic 会受到邮件提醒，通知节点发生过的历史问题。
+
+
+# npd-node-replace 资源消耗评估：
+```bash
+[root@Test ~]# kubectl top pod npd-node-replace-5c67496ffd-gkg2w -n kube-system
+NAME                                CPU(cores)   MEMORY(bytes)   
+npd-node-replace-5c67496ffd-gkg2w   1m           7Mi     
+```
