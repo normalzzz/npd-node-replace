@@ -341,6 +341,7 @@ func (n *NIRController) processNextItem() bool {
 			err = n.drainNode(nodename)
 			if err != nil {
 				log.Errorln("fail to drain node:", err)
+				// TODO: when failed to drain node,  drain operation may be never happen again, because no new node will join, need to fix this
 				n.queue.AddRateLimited(key)
 				return true
 			}
