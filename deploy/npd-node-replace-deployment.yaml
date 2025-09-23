@@ -40,7 +40,7 @@ spec:
             fieldRef:
               fieldPath: spec.nodeName
         - name: SNS_TOPIC_ARN
-          value: "arn:aws-cn:sns:cn-north-1:073070604328:zhxingcm-ec2-cpu-utilize-topic"
+          value: <amazon sns topic arn>
       volumes:
       - name: config-volume
         configMap:
