@@ -45,7 +45,7 @@ Tolerance 配置中可以配置对于某些问题发生问题的容忍次数，�
 ### 权限配置：
 您需要创建 [IRSA](https://docs.amazonaws.cn/eks/latest/userguide/iam-roles-for-service-accounts.html) 的方式为 npd-node-replace pod 赋予 Amazon Web Services 权限。
 修改 sevice account 配置清单，添加与 IAM role 的关联，如下，您需要将  <irsa iam role arn> 部分替换为 IRSA role arn。
-```json
+```
 apiVersion: v1
 kind: ServiceAccount
 metadata:
