@@ -360,7 +360,6 @@ func (n *NIRController) processNextItem() bool {
 			// TODO when the issue node is where controller pod reside on , add logic to handle self pod, these logs maybe never output
 			// Warning this section may not work as expect!!!!! need more test and modify!!!
 			if nodeIssueReport.Name == n.selfnodename {
-
 				if err := n.kubeclient.CoreV1().Nodes().Delete(context.TODO(), n.selfnodename, metav1.DeleteOptions{}); err != nil {
 					log.Errorln("when trying to delete self node, error happened:", err)
 				}
@@ -368,6 +367,11 @@ func (n *NIRController) processNextItem() bool {
 					log.Errorln("when trying to delete self pod:", n.selfpodnamespace, n.selfpodname,"failed with error:", err)
 				}else {
 					log.Infoln("deleted self pod when replace the issue node")
+				}
+				// return true
+			}else {
+				if err := n.kubeclient.CoreV1().Nodes().Delete(context.TODO(), nodeIssueReport.Name, metav1.DeleteOptions{}); err != nil {
+					log.Errorln("when tring to delete node after drained none-self node, failed with error:", err)
 				}
 			}
 			// TODO: need add logic to delete none-self node resource
