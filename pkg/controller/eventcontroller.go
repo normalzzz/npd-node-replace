@@ -287,7 +287,7 @@ func (c *EventController) isNodeProblemDetectorEvent(e *corev1.Event) bool {
 
 	nodeobj, err := c.NodeLister.Get(nodename)
 	if err != nil {
-		log.Error("failed to get the node object when try to determain whether node is managed by karpenter")
+		log.Error("failed to get the node object when try to determain whether node is managed by karpenter",err)
 		return false
 	}
 	for _, nodeowner := range nodeobj.OwnerReferences {
