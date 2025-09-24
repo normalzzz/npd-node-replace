@@ -81,6 +81,7 @@ func constructNodeIssueReport(event *corev1.Event) nodeIssueReportv1alpha1.NodeI
 			NodeName:     event.InvolvedObject.Name,
 			NodeProblems: nodeprolems,
 			Action:       nodeIssueReportv1alpha1.None,
+			Phase: nodeIssueReportv1alpha1.PhaseNone,
 		},
 	}
 }

@@ -61,10 +61,13 @@ spec:
                   - message
                   type: object
                 type: object
+              phase:
+                type: string
             required:
             - action
             - nodename
             - nodeproblems
+            - phase
             type: object
         required:
         - spec

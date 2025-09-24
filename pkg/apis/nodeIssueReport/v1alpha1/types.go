@@ -38,6 +38,7 @@ type NodeIssueReportSpec struct {
 	NodeName     string                   `json:"nodename"`
 	NodeProblems map[string]ProblemRecord `json:"nodeproblems"`
 	Action       Action                   `json:"action"`
+	Phase 		 Phase 					  `json:"phase"`
 }
 
 // NodeIssueReportStatus is the status for a NodeIssueReport resource
@@ -67,4 +68,14 @@ const (
 	Reboot  Action = "reboot"
 	Replace Action = "replace"
 	None    Action = "none"
+)
+
+type Phase string
+const (
+	PhaseNone Phase = "phasenone"
+	PhaseReplace Phase = "phasereplace"
+	PhaseReboot Phase = "phasereboot"
+	PhaseDetached Phase = "phasedetached"
+	PhaseNewJoined Phase = "phaseneejoined"
+	PhaseDrained Phase = "phasedrained"
 )

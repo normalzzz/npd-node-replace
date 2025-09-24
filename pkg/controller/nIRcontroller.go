@@ -103,25 +103,6 @@ func (n *NIRController) nodeUpdateHandler(oldObj interface{}, newObj interface{}
 
 	newNodeObj := newObj.(*v1.Node)
 
-	//oldNodeCondition := oldNodeObj.Status.Conditions
-	//
-	//newNodeConfition := newNodeObj.Status.Conditions
-	//
-	//for _, newcondition := range newNodeConfition {
-	//
-	//	if newcondition.Type == "Ready" && newcondition.Status == "True" {
-	//		for _, oldcondition := range oldNodeCondition {
-	//			if oldcondition.Type == "Ready" && oldcondition.Status == "False" {
-	//				log.Infoln("new node join in:", newNodeObj.Name)
-	//				newNodeChan <- newNodeObj.Name
-	//
-	//			}
-	//
-	//		}
-	//	}
-	//
-	//}
-
 	oldReady := n.isNodeReady(oldNodeObj)
 	newReady := n.isNodeReady(newNodeObj)
 
@@ -273,10 +254,93 @@ func (n *NIRController) processNextItem() bool {
 	nodename := nodeIssueReport.Spec.NodeName
 	problems := nodeIssueReport.Spec.NodeProblems
 
-	if nodeIssueReport.Spec.Action != nodeIssueReportv1alpha1.None {
-		//action := n.toleranceConfig.ToleranceCollection[]
 
-		log.Infoln("problem on node is not tolerated by user, do something")
+	if nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseDrained {
+		if nodeIssueReport.Name == n.selfnodename {
+
+			// Notify admin with SNS
+			if err := n.awsOperator.SNSNotify(*nodeIssueReport); err != nil {
+				log.Error("[node drained phase] failed to notify admin when replace node", err)
+				n.queue.AddRateLimited(key)
+				return true
+			}
+			// delete nodeIssueReport
+			if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Delete(context.TODO(), nodeIssueReport.Spec.NodeName, metav1.DeleteOptions{}); err != nil {
+				log.Errorln("[node drained phase] faild to delete nodeIssueReport", nodeIssueReport.Name)
+			}else {
+				log.Infoln("[node drained phase] replace Action done, deleted nodeIssueReport:", nodeIssueReport.Name)
+			}
+			// delete issye node
+			if nodeIssueReport.Name == n.selfnodename {
+
+			if err := n.kubeclient.CoreV1().Nodes().Delete(context.TODO(), n.selfnodename, metav1.DeleteOptions{}); err != nil {
+				log.Errorln("[node drained phase] when trying to delete self node, error happened:", err)
+			}
+			if err := n.kubeclient.CoreV1().Pods(n.selfpodnamespace).Delete(context.TODO(), n.selfpodname, metav1.DeleteOptions{}); err != nil {
+				log.Errorln("[node drained phase] when trying to delete self pod:", n.selfpodnamespace, n.selfpodname,"failed with error:", err)
+
+			}else {
+				log.Infoln("[node drained phase] deleted self pod when replace the issue node")
+			}
+			
+		}else {
+			if err := n.kubeclient.CoreV1().Nodes().Delete(context.TODO(), nodeIssueReport.Name, metav1.DeleteOptions{}); err != nil {
+				log.Errorln("[node drained phase] when trying to delete none-self node, error happened:", err)
+				n.queue.AddRateLimited(key)
+				return true
+			}
+			// return true
+		}
+		return true
+	}
+	}
+
+	if nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseNewJoined {
+		// TODO drain
+		err = n.drainNode(nodename)
+			if err != nil {
+				log.Errorln("[node newnodejoined phase] fail to drain node:", err)
+				// TODO: when failed to drain node,  drain operation may be never happen again, because no new node will join, need to fix this
+				n.queue.AddRateLimited(key)
+				return true
+			}
+		log.Infoln("[node newnodejoined phase] successfully drained node")
+
+		nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseDrained
+		if _, err = n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.TODO(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
+			log.Infoln("[node newnodejoined phase] faile to change phase to drained with error:", err)
+			n.queue.AddRateLimited(key)
+			return true
+		}
+		log.Infoln("[node newnodejoined phase] successfully change to drained phase")
+		return true
+	}
+
+	if nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseDetached {
+
+		// newNodeName := ""
+
+		select {
+		case newNodeName := <-newNodeChan:
+			log.Infoln("New node ready:", newNodeName)
+
+			nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseNewJoined
+			if _, err = n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.TODO(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
+				log.Infoln("[node detached phase] faile to change phase to newnodejoined with error:", err)
+				n.queue.AddRateLimited(key)
+				return true
+			}
+			log.Infoln("[node detached phase] detached phase passed, change phase to newnodejoined ")
+			return true
+		case <-time.After(5 * time.Minute):
+			log.Errorln("timed out waiting for new node to become ready")
+			n.queue.AddRateLimited(key)
+			return true
+		}
+	}
+
+	if nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseReplace {
+		log.Infoln("[node replace phase] do phase replace action for node:", nodename)
 		nodeobj, err := n.kubeclient.CoreV1().Nodes().Get(context.Background(), nodename, metav1.GetOptions{})
 		if err != nil {
 			log.Errorln("fail to get the node:", nodename, "thus failed to deal with node issues: ", err)
@@ -286,95 +350,82 @@ func (n *NIRController) processNextItem() bool {
 		providerIDslice := strings.Split(nodeobj.Spec.ProviderID, "/")
 
 		instanceId := providerIDslice[len(providerIDslice)-1]
-		log.Infoln("before do operation, get instance Id:", instanceId)
+		log.Infoln("[node replace phase] before do replace action , get instance Id:", instanceId)
+		asgId, err := n.awsOperator.GetASGId(instanceId)
+		if err != nil {
+			log.Errorln("[node replace phase] faile to find ASG name from instance tag, check if tag 'aws:autoscaling:groupName' exist:", instanceId)
+			n.queue.AddRateLimited(key)
+			return true
+		}
 
-		if nodeIssueReport.Spec.Action == nodeIssueReportv1alpha1.Reboot {
+		err = n.awsOperator.DetachInstance(asgId, instanceId)
+		if err != nil {
+			log.Errorln("[node replace phase] fail to detach instance:", err)
+			n.queue.AddRateLimited(key)
+			return true
+		}
+
+		nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseDetached
+		if _, err = n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.TODO(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
+			log.Infoln("[node replace phase] faile to chandge phase to detached with error:", err)
+			n.queue.AddRateLimited(key)
+			return true
+		}
+		log.Infoln("[node replace phase] replace phase pass, change to detached phase")
+		return true
+	}
+
+
+	if nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseReboot {
+		log.Infoln("[node reboot phase] do phase reboot action for node:", nodename)
+		nodeobj, err := n.kubeclient.CoreV1().Nodes().Get(context.Background(), nodename, metav1.GetOptions{})
+		if err != nil {
+			log.Errorln("[node reboot phase] fail to get the node:", nodename, "thus failed to deal with node issues: ", err)
+			n.queue.AddRateLimited(key)
+			return true
+		}
+		providerIDslice := strings.Split(nodeobj.Spec.ProviderID, "/")
+
+		instanceId := providerIDslice[len(providerIDslice)-1]
+
+		log.Infoln("[node reboot phase] before do reboot action , get instance Id:", instanceId)
+		log.Infoln("do something with node, rebooting node:", nodename)
+		err = n.awsOperator.RebootInstance(instanceId)
+		if err != nil {
+			log.Errorln("fail to reboot instance:", err)
+			n.queue.AddRateLimited(key)
+			return true
+		}
+		log.Infoln("successfully rebooted node:", nodename)
+
+		// TODO: add function to notice user what happened, for investigating root cause
+		if err := n.awsOperator.SNSNotify(*nodeIssueReport); err != nil {
+			log.Error("failed to notify admin when reboot node", err)
+		}
+		if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Delete(context.TODO(), nodeIssueReport.Spec.NodeName, metav1.DeleteOptions{}); err != nil {
+			log.Errorln("faild to delete nodeIssueReport", nodeIssueReport.Name)
+		}else {
+			log.Infoln("reboot Action done, deleted nodeIssueReport:", nodeIssueReport.Name)
+		}
+		return true
+	}
+
+	if nodeIssueReport.Spec.Action != nodeIssueReportv1alpha1.None {
+
+		log.Infoln("problem on node is not tolerated by user, do something")
+		if nodeIssueReport.Spec.Action == nodeIssueReportv1alpha1.Reboot && nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseNone {
 			//TODO aws reboot action logic
-			log.Infoln("do something with node, rebooting node:", nodename)
-			err = n.awsOperator.RebootInstance(instanceId)
-			if err != nil {
-				log.Errorln("fail to reboot instance:", err)
-				n.queue.AddRateLimited(key)
-				return true
-			}
-			log.Infoln("successfully rebooted node:", nodename)
-
-			// TODO: add function to notice user what happened, for investigating root cause
-			if err := n.awsOperator.SNSNotify(*nodeIssueReport); err != nil {
-				log.Error("failed to notify admin when reboot node", err)
-			}
-			if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Delete(context.TODO(), nodeIssueReport.Spec.NodeName, metav1.DeleteOptions{}); err != nil {
-				log.Errorln("faild to delete nodeIssueReport", nodeIssueReport.Name)
-			}else {
-				log.Infoln("reboot Action done, deleted nodeIssueReport:", nodeIssueReport.Name)
+			nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseReboot
+			if _, err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.TODO(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
+				log.Errorln("[node none phase]  failed to change the phase to phase reboot, with error:", err)
 			}
 			return true
-		} else if nodeIssueReport.Spec.Action == nodeIssueReportv1alpha1.Replace {
+		} else if nodeIssueReport.Spec.Action == nodeIssueReportv1alpha1.Replace && nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseNone {
 			//TODO aws replace node logic
-			asgId, err := n.awsOperator.GetASGId(instanceId)
-			if err != nil {
-				log.Errorln("faile to find ASG name from instance tag, check if tag 'aws:autoscaling:groupName' exist:", instanceId)
-				n.queue.AddRateLimited(key)
-				return true
+			nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseReplace
+			if _, err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.TODO(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
+				log.Errorln("[node none phase]  failed to change the phase to phase replace, with error:", err)
 			}
-
-			err = n.awsOperator.DetachInstance(asgId, instanceId)
-			if err != nil {
-				log.Errorln("fail to detach instance:", err)
-				n.queue.AddRateLimited(key)
-				return true
-			}
-
-			newNodeName := ""
-			select {
-			case newNodeName := <-newNodeChan:
-				log.Infoln("New node ready:", newNodeName)
-			case <-time.After(5 * time.Minute):
-				log.Errorln("timed out waiting for new node to become ready")
-				n.queue.AddRateLimited(key)
-				return true
-			}
-
-			// TODO need to add logic to wait for new node join in, and then drain old node
-			// DONE
-
-			err = n.drainNode(nodename)
-			if err != nil {
-				log.Errorln("fail to drain node:", err)
-				// TODO: when failed to drain node,  drain operation may be never happen again, because no new node will join, need to fix this
-				n.queue.AddRateLimited(key)
-				return true
-			}
-
-			log.Infoln("found fatal errors, successfully replaced node:", nodename, "new node name:", newNodeName)
-			// TODO: add function to notice user what happened, for investigating root cause
-			if err := n.awsOperator.SNSNotify(*nodeIssueReport); err != nil {
-				log.Error("failed to notify admin when replace node", err)
-			}
-			if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Delete(context.TODO(), nodeIssueReport.Spec.NodeName, metav1.DeleteOptions{}); err != nil {
-				log.Errorln("faild to delete nodeIssueReport", nodeIssueReport.Name)
-			}else {
-				log.Infoln("replace Action done, deleted nodeIssueReport:", nodeIssueReport.Name)
-			}
-
-			// TODO when the issue node is where controller pod reside on , add logic to handle self pod, these logs maybe never output
-			// Warning this section may not work as expect!!!!! need more test and modify!!!
-			if nodeIssueReport.Name == n.selfnodename {
-				if err := n.kubeclient.CoreV1().Nodes().Delete(context.TODO(), n.selfnodename, metav1.DeleteOptions{}); err != nil {
-					log.Errorln("when trying to delete self node, error happened:", err)
-				}
-				if err := n.kubeclient.CoreV1().Pods(n.selfpodnamespace).Delete(context.TODO(), n.selfpodname, metav1.DeleteOptions{}); err != nil {
-					log.Errorln("when trying to delete self pod:", n.selfpodnamespace, n.selfpodname,"failed with error:", err)
-				}else {
-					log.Infoln("deleted self pod when replace the issue node")
-				}
-				// return true
-			}else {
-				if err := n.kubeclient.CoreV1().Nodes().Delete(context.TODO(), nodeIssueReport.Name, metav1.DeleteOptions{}); err != nil {
-					log.Errorln("when tring to delete node after drained none-self node, failed with error:", err)
-				}
-			}
-			// TODO: need add logic to delete none-self node resource
 			return true
 		}
 
@@ -391,6 +442,7 @@ func (n *NIRController) processNextItem() bool {
 			toleranceAction := tolerancecount.Action
 			if toleranceAction == config.ActionReboot {
 				nodeIssueReport.Spec.Action = nodeIssueReportv1alpha1.Reboot
+				// nodeIssueReport.Spec.Phase = NodeissuereporterV1alpha1.pha
 				if result, err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.Background(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
 					log.Errorln("failed to update NodeIssueReport:", err)
 				}else {

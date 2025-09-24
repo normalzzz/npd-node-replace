@@ -18,7 +18,7 @@ spec:
     spec:
       serviceAccount: npd-node-replace-sa
       containers:
-      - image: <image_url>
+      - image: <image url>
         name: npd-node-replace
         imagePullPolicy: Always
         volumeMounts:
@@ -40,7 +40,7 @@ spec:
             fieldRef:
               fieldPath: spec.nodeName
         - name: SNS_TOPIC_ARN
-          value: <amazon sns topic arn>
+          value: <sns topic arn >
       volumes:
       - name: config-volume
         configMap:
