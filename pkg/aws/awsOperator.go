@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -20,7 +21,7 @@ import (
 type AwsOperator struct {
 	ec2client *ec2.Client
 	asgclient *autoscaling.Client
-	snscli *sns.Client
+	snscli    *sns.Client
 }
 
 var boolvar = false
@@ -94,27 +95,57 @@ func (a *AwsOperator) GetASGId(instanceid string) (string, error) {
 	//return ""
 }
 
-
-func (a *AwsOperator) SNSNotify( nodeissuereport nodeIssueReportv1alpha1.NodeIssueReport) error{
+func (a *AwsOperator) SNSNotify(nodeissuereport nodeIssueReportv1alpha1.NodeIssueReport) error {
 	snstopic := os.Getenv("SNS_TOPIC_ARN")
-	nodeissuereportjson, err  := json.Marshal(nodeissuereport)
-	nodeissuereportmessage := string(nodeissuereportjson)
-	if err != nil{
-		log.Error("when trying to notify admin with sns, Marshal nodeissuereport with error: ", err)
-		return err
-	}
-	snspublistInput := sns.PublishInput{
-		TopicArn: &snstopic,
-		Message: &nodeissuereportmessage,
-	}
-	_, err = a.snscli.Publish(context.TODO(), &snspublistInput)
-
+	action := nodeissuereport.Spec.Action
+	nodeProblems := nodeissuereport.Spec.NodeProblems
+	nodeProblemsJson, err := json.Marshal(nodeProblems)
 	if err != nil {
-		log.Errorln("failed to send email message to SNS topic with error", err)
+		log.Errorln(" while try to publish node issue through sns, Marshal nodeProblems object , error happened:", err)
 		return err
+	}
+
+	if action == nodeIssueReportv1alpha1.Reboot {
+		snsSubject := "[From npd-node-replace]: Your node has been REBOOTED, because some unbearable issues have happened"
+		nodeissuereportmessage := fmt.Sprintf(`
+		NodeName: %s
+		Issue Happend: %s
+		Action Taken: %s
+		`, nodeissuereport.Spec.NodeName, string(nodeProblemsJson), action)
+		snspublistInput := sns.PublishInput{
+			TopicArn: &snstopic,
+			Subject:  &snsSubject,
+			Message:  &nodeissuereportmessage,
+		}
+		_, err = a.snscli.Publish(context.TODO(), &snspublistInput)
+
+		if err != nil {
+			log.Errorln("failed to send email message to SNS topic with error", err)
+			return err
+		}
+
+	}
+
+	if action == nodeIssueReportv1alpha1.Replace {
+		snsSubject := "[From npd-node-replace]: Your node has been REPLACED, because some unbearable issues have happened"
+		nodeissuereportmessage := fmt.Sprintf(`
+		NodeName: %s
+		Issue Happend: %s
+		Action Taken: %s
+		`, nodeissuereport.Spec.NodeName, string(nodeProblemsJson), action)
+		snspublistInput := sns.PublishInput{
+			TopicArn: &snstopic,
+			Subject:  &snsSubject,
+			Message:  &nodeissuereportmessage,
+		}
+		_, err = a.snscli.Publish(context.TODO(), &snspublistInput)
+
+		if err != nil {
+			log.Errorln("failed to send email message to SNS topic with error", err)
+			return err
+		}
 	}
 	return nil
-
 
 }
 
@@ -126,6 +157,6 @@ func NewAwsOperator(config aws.Config) *AwsOperator {
 	return &AwsOperator{
 		ec2client: ec2cli,
 		asgclient: asgcli,
-		snscli: snscli,
+		snscli:    snscli,
 	}
 }

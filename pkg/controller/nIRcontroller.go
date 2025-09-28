@@ -47,13 +47,13 @@ type NIRController struct {
 	kubeclient            kubernetes.Clientset
 	awsOperator           awspkg.AwsOperator
 	nodeInformer          informercorev1.NodeInformer
-	selfpodname string
-	selfpodnamespace string
-	selfnodename string
+	selfpodname           string
+	selfpodnamespace      string
+	selfnodename          string
 }
 
 func init() {
-	newNodeChan = make(chan string, 10) 
+	newNodeChan = make(chan string, 10)
 }
 
 func (n *NIRController) enqueue(obj interface{}) {
@@ -71,13 +71,12 @@ func (n *NIRController) nIRAddFunctionHandler(obj interface{}) {
 	n.enqueue(obj)
 }
 
-func (n *NIRController) nIRUpdateFunctionHandler(oldObj, newObj interface{}){
+func (n *NIRController) nIRUpdateFunctionHandler(oldObj, newObj interface{}) {
 	oldObjnIrR, err := json.Marshal(oldObj)
 	if err != nil {
 		log.Errorln("failed to Marshal oldobj", err)
 	}
 	log.Infoln("oldObjnIrR: ", string(oldObjnIrR))
-
 
 	newObjnIrR, err := json.Marshal(newObj)
 	if err != nil {
@@ -182,7 +181,7 @@ func (n *NIRController) isDaemonset(pod v1.Pod) bool {
 	return false
 }
 
-func (n *NIRController) isSelfPod(pod v1.Pod) bool{
+func (n *NIRController) isSelfPod(pod v1.Pod) bool {
 
 	if pod.Name == n.selfpodname && pod.Namespace == n.selfpodnamespace && pod.Spec.NodeName == n.selfnodename {
 		log.Info("controller itself pod, skipped")
@@ -254,7 +253,6 @@ func (n *NIRController) processNextItem() bool {
 	nodename := nodeIssueReport.Spec.NodeName
 	problems := nodeIssueReport.Spec.NodeProblems
 
-
 	if nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseDrained {
 		if nodeIssueReport.Name == n.selfnodename {
 
@@ -265,45 +263,55 @@ func (n *NIRController) processNextItem() bool {
 				return true
 			}
 			// delete nodeIssueReport
-			if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Delete(context.TODO(), nodeIssueReport.Spec.NodeName, metav1.DeleteOptions{}); err != nil {
+			if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Delete(context.TODO(), nodeIssueReport.Name, metav1.DeleteOptions{}); err != nil {
 				log.Errorln("[node drained phase] faild to delete nodeIssueReport", nodeIssueReport.Name)
-			}else {
+			} else {
 				log.Infoln("[node drained phase] replace Action done, deleted nodeIssueReport:", nodeIssueReport.Name)
 			}
 			// delete issye node
 			if nodeIssueReport.Name == n.selfnodename {
 
-			if err := n.kubeclient.CoreV1().Nodes().Delete(context.TODO(), n.selfnodename, metav1.DeleteOptions{}); err != nil {
-				log.Errorln("[node drained phase] when trying to delete self node, error happened:", err)
-			}
-			if err := n.kubeclient.CoreV1().Pods(n.selfpodnamespace).Delete(context.TODO(), n.selfpodname, metav1.DeleteOptions{}); err != nil {
-				log.Errorln("[node drained phase] when trying to delete self pod:", n.selfpodnamespace, n.selfpodname,"failed with error:", err)
+				if err := n.kubeclient.CoreV1().Nodes().Delete(context.TODO(), n.selfnodename, metav1.DeleteOptions{}); err != nil {
+					log.Errorln("[node drained phase] when trying to delete self node, error happened:", err)
+				}
+				if err := n.kubeclient.CoreV1().Pods(n.selfpodnamespace).Delete(context.TODO(), n.selfpodname, metav1.DeleteOptions{}); err != nil {
+					log.Errorln("[node drained phase] when trying to delete self pod:", n.selfpodnamespace, n.selfpodname, "failed with error:", err)
 
-			}else {
-				log.Infoln("[node drained phase] deleted self pod when replace the issue node")
+				} else {
+					log.Infoln("[node drained phase] deleted self pod when replace the issue node")
+				}
+
 			}
-			
-		}else {
+		} else {
+			if err := n.awsOperator.SNSNotify(*nodeIssueReport); err != nil {
+				log.Error("[node drained phase] failed to notify admin when replace node", err)
+				n.queue.AddRateLimited(key)
+				return true
+			}
 			if err := n.kubeclient.CoreV1().Nodes().Delete(context.TODO(), nodeIssueReport.Name, metav1.DeleteOptions{}); err != nil {
 				log.Errorln("[node drained phase] when trying to delete none-self node, error happened:", err)
 				n.queue.AddRateLimited(key)
 				return true
 			}
+			if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Delete(context.TODO(), nodeIssueReport.Name, metav1.DeleteOptions{}); err != nil{
+			log.Errorln("[node drained phase] faild to delete nodeIssueReport", nodeIssueReport.Name, "with error:", err)
+			} else {
+				log.Infoln("[node drained phase] replace Action done, deleted nodeIssueReport:", nodeIssueReport.Name)
+			}
 			// return true
 		}
 		return true
-	}
 	}
 
 	if nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseNewJoined {
 		// TODO drain
 		err = n.drainNode(nodename)
-			if err != nil {
-				log.Errorln("[node newnodejoined phase] fail to drain node:", err)
-				// TODO: when failed to drain node,  drain operation may be never happen again, because no new node will join, need to fix this
-				n.queue.AddRateLimited(key)
-				return true
-			}
+		if err != nil {
+			log.Errorln("[node newnodejoined phase] fail to drain node:", err)
+			// TODO: when failed to drain node,  drain operation may be never happen again, because no new node will join, need to fix this
+			n.queue.AddRateLimited(key)
+			return true
+		}
 		log.Infoln("[node newnodejoined phase] successfully drained node")
 
 		nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseDrained
@@ -320,9 +328,10 @@ func (n *NIRController) processNextItem() bool {
 
 		// newNodeName := ""
 
+		log.Infoln("[node detached phase] Waiting for new node joining .....")
 		select {
 		case newNodeName := <-newNodeChan:
-			log.Infoln("New node ready:", newNodeName)
+			log.Infoln("[node detached phase] New node ready:", newNodeName)
 
 			nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseNewJoined
 			if _, err = n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.TODO(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
@@ -375,7 +384,6 @@ func (n *NIRController) processNextItem() bool {
 		return true
 	}
 
-
 	if nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseReboot {
 		log.Infoln("[node reboot phase] do phase reboot action for node:", nodename)
 		nodeobj, err := n.kubeclient.CoreV1().Nodes().Get(context.Background(), nodename, metav1.GetOptions{})
@@ -389,23 +397,23 @@ func (n *NIRController) processNextItem() bool {
 		instanceId := providerIDslice[len(providerIDslice)-1]
 
 		log.Infoln("[node reboot phase] before do reboot action , get instance Id:", instanceId)
-		log.Infoln("do something with node, rebooting node:", nodename)
+		log.Infoln("[node reboot phase] do something with node, rebooting node:", nodename)
 		err = n.awsOperator.RebootInstance(instanceId)
 		if err != nil {
-			log.Errorln("fail to reboot instance:", err)
+			log.Errorln("[node reboot phase] fail to reboot instance:", err)
 			n.queue.AddRateLimited(key)
 			return true
 		}
-		log.Infoln("successfully rebooted node:", nodename)
+		log.Infoln("[node reboot phase] successfully rebooted node:", nodename)
 
 		// TODO: add function to notice user what happened, for investigating root cause
 		if err := n.awsOperator.SNSNotify(*nodeIssueReport); err != nil {
-			log.Error("failed to notify admin when reboot node", err)
+			log.Error("[node reboot phase] failed to notify admin when reboot node", err)
 		}
 		if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Delete(context.TODO(), nodeIssueReport.Spec.NodeName, metav1.DeleteOptions{}); err != nil {
-			log.Errorln("faild to delete nodeIssueReport", nodeIssueReport.Name)
-		}else {
-			log.Infoln("reboot Action done, deleted nodeIssueReport:", nodeIssueReport.Name)
+			log.Errorln("[node reboot phase] faild to delete nodeIssueReport", nodeIssueReport.Name)
+		} else {
+			log.Infoln("[node reboot phase] reboot Action done, deleted nodeIssueReport:", nodeIssueReport.Name)
 		}
 		return true
 	}
@@ -432,6 +440,7 @@ func (n *NIRController) processNextItem() bool {
 	}
 
 	// travesal all node problems
+	// thinking replace will handle more unbearable issues, if NIR is tagged with replace ation , instanstly perform , is tagged with reboot action, continue to travesal problems on the node
 	for problemname, problem := range problems {
 		// get the tolerance config for specific senario
 		log.Infoln("travesal all node problems, current problem", problemname)
@@ -445,33 +454,33 @@ func (n *NIRController) processNextItem() bool {
 				// nodeIssueReport.Spec.Phase = NodeissuereporterV1alpha1.pha
 				if result, err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.Background(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
 					log.Errorln("failed to update NodeIssueReport:", err)
-				}else {
-					if resultjson, err := json.Marshal(result); err != nil{
+				} else {
+					if resultjson, err := json.Marshal(result); err != nil {
 						log.Errorln("failed to Marshal Action Update result", err)
-					}else {
+					} else {
 						log.Debugln("Action Update result", string(resultjson))
 					}
 				}
-				
-				return true
+
 			} else if toleranceAction == config.ActionReplace {
 				nodeIssueReport.Spec.Action = nodeIssueReportv1alpha1.Replace
 				// n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.Background(), nodeIssueReport, metav1.UpdateOptions{})
 				if result, err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.Background(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
 					log.Errorln("failed to update NodeIssueReport:", err)
-				}else {
-					if resultjson, err := json.Marshal(result); err != nil{
+				} else {
+					if resultjson, err := json.Marshal(result); err != nil {
 						log.Errorln("failed to Marshal Action Update result", err)
-					}else {
+					} else {
 						log.Debugln("Action Update result", string(resultjson))
 					}
 				}
 				return true
+
 			}
 
 		}
-		// return true
-		
+		return true
+
 	}
 
 	return true
@@ -517,14 +526,14 @@ func NewNIRController(nodeIssueReportInformer nodeIssueReport.NodeIssueReportInf
 		kubeclient:              kubeclient,
 		awsOperator:             awsOperator,
 		nodeInformer:            nodeInformer,
-		selfpodname: os.Getenv("SELF_POD_NAME"),
-		selfpodnamespace: os.Getenv("SELF_POD_NAMESPACE"),
-		selfnodename: os.Getenv("SELF_NODE_NAME"),
+		selfpodname:             os.Getenv("SELF_POD_NAME"),
+		selfpodnamespace:        os.Getenv("SELF_POD_NAMESPACE"),
+		selfnodename:            os.Getenv("SELF_NODE_NAME"),
 	}
 
 	nodeIssueReportInformer.Informer().AddEventHandler(
 		cache.ResourceEventHandlerFuncs{
-			AddFunc: n.nIRAddFunctionHandler,
+			AddFunc:    n.nIRAddFunctionHandler,
 			UpdateFunc: n.nIRUpdateFunctionHandler,
 		})
 

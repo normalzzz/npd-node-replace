@@ -4,6 +4,15 @@ metadata:
   creationTimestamp: null
   name: npd-node-replace-clusterrole
 rules:
+- apiGroups: [""]
+  resources: ["pods/eviction"]
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - delete
+  - update
 - apiGroups:
   - ""
   resources:
