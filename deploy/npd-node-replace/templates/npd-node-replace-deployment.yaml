@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "npd-node-replace.fullname" . }}-npd-node-replace
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: npd-node-replace
+  {{- include "npd-node-replace.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.npdNodeReplace.replicas }}
+  selector:
+    matchLabels:
+      app: npd-node-replace
+    {{- include "npd-node-replace.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        app: npd-node-replace
+      {{- include "npd-node-replace.selectorLabels" . | nindent 8 }}
+    spec:
+      containers:
+      - env:
+        - name: SELF_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: SELF_POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: SELF_NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: SNS_TOPIC_ARN
+          value: {{ quote .Values.npdNodeReplace.npdNodeReplace.env.snsTopicArn }}
+        - name: KUBERNETES_CLUSTER_DOMAIN
+          value: {{ quote .Values.kubernetesClusterDomain }}
+        - name: NODE_DOULBE_CHECK_GRACE_TIME
+          value: {{ quote .Values.npdNodeReplace.npdNodeReplace.env.nodeDoubleCheckGraceTime }}
+        image: {{ .Values.npdNodeReplace.npdNodeReplace.image.repository }}:{{ .Values.npdNodeReplace.npdNodeReplace.image.tag
+          | default .Chart.AppVersion }}
+        imagePullPolicy: {{ .Values.npdNodeReplace.npdNodeReplace.imagePullPolicy }}
+        name: npd-node-replace
+        resources: {}
+        volumeMounts:
+        - mountPath: /app/tolerance.json
+          name: config-volume
+          readOnly: true
+          subPath: tolerance.json
+      serviceAccount: {{ include "npd-node-replace.fullname" . }}-sa
+      volumes:
+      - configMap:
+          name: {{ include "npd-node-replace.fullname" . }}-tolerance-config
+        name: config-volume

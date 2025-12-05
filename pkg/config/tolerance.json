@@ -1,0 +1,12 @@
+{
+  "tolerancecollection": {
+    "OOMKill": {
+      "times": 2,
+      "action": "reboot"
+    },
+    "KernelHang": {
+      "times": 3,
+      "action": "replace"
+    }
+  }
+}

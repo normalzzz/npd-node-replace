@@ -1,0 +1,29 @@
+kubernetesClusterDomain: cluster.local
+npdNodeReplace:
+  npdNodeReplace:
+    env:
+      snsTopicArn: <SNS topic arn>
+      nodeDoubleCheckGraceTime: 5
+    image:
+      repository: <npd-node-replace image repository url>
+      tag: v1
+    imagePullPolicy: Always
+  replicas: 1
+sa:
+  serviceAccount:
+    annotations:
+      eks.amazonaws.com/role-arn: <IAM role arn for npd-node-replace>.
+toleranceConfig:
+  toleranceJson: |-
+    {
+      "tolerancecollection": {
+        "OOMKilling": {
+          "times": 2,
+          "action": "reboot"
+        },
+        "KernelOops": {
+          "times": 3,
+          "action": "replace"
+        }
+      }
+    }

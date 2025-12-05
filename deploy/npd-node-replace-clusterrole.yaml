@@ -1,0 +1,52 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  creationTimestamp: null
+  name: npd-node-replace-clusterrole
+rules:
+- apiGroups: [""]
+  resources: ["pods/eviction"]
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - delete
+  - update
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - nodes
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
+  - delete
+  - update
+  - patch
+- apiGroups:
+  - "nodeissuereporter.xingzhan.io"
+  resources:
+  - nodeissuereports
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - delete
+  - update
+- apiGroups: ["policy"]
+  resources: ["pods/eviction"]
+  verbs: ["create"]
+- apiGroups: ["apps"]
+  resources: ["daemonsets"]
+  verbs: ["get", "list", "watch"]
