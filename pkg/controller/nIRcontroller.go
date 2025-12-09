@@ -368,12 +368,26 @@ func (n *NIRController) processNextItem() bool {
 
 	if nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseDetached {
 
-		// newNodeName := ""
 
 		n.logger.Infoln("[node detached phase] Waiting for new node joining .....")
 		select {
 		case newNodeName := <-newNodeChan:
 			n.logger.Infoln("[node detached phase] New node ready:", newNodeName)
+
+			// fix Bug: if manually scale up node group, new node join in cluster, this channel will receive the new node name, but this new node is not the replacing node we are looking for,  should skip it
+			newnodeobj, err := n.kubeclient.CoreV1().Nodes().Get(context.TODO(), newNodeName, metav1.GetOptions{})
+			if err != nil {
+				n.logger.Errorln("[node detached phase] fail to get new node object when trying to drain node:", newNodeName, "with error:", err)
+				n.queue.AddRateLimited(key)
+				return true
+			}
+			isNewNodeBecomeReadycheck := time.Since(newnodeobj.ObjectMeta.CreationTimestamp.Time) <= 15*time.Minute
+
+			if !isNewNodeBecomeReadycheck {
+				n.logger.Infoln("[node detached phase] the new node is not created recently, may be an old node become ready again, just skip it:", newNodeName)
+				n.queue.AddRateLimited(key)
+				return true
+			}
 
 			nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseNewJoined
 			if _, err = n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.TODO(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
@@ -383,7 +397,8 @@ func (n *NIRController) processNextItem() bool {
 			}
 			n.logger.Infoln("[node detached phase] detached phase passed, change phase to newnodejoined ")
 			return true
-		case <-time.After(5 * time.Minute):
+		// changed timout time from 5 minutes to 15 minutes
+		case <-time.After(15 * time.Minute):
 			n.logger.Errorln("timed out waiting for new node to become ready")
 			n.queue.AddRateLimited(key)
 			return true
