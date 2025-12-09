@@ -5,7 +5,7 @@ npdNodeReplace:
       snsTopicArn: <SNS topic arn>
       nodeDoubleCheckGraceTime: 5
     image:
-      repository: <npd-node-replace image repository url>
+      repository: zxxxxzz/npd-node-replace:v1
       tag: v1
     imagePullPolicy: Always
   replicas: 1
