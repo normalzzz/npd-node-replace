@@ -1,0 +1,21 @@
+# JetBrains IDE 配置目录
+.idea/
+
+# 编译生成的文件
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go 模块下载缓存
+/go.pkg/
+#/vendor/
+
+# 测试二进制文件
+*.test
+*.out
+
+# 其他常见
+.DS_Store
+*.log

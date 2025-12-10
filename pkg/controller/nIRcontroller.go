@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 	awspkg "xingzhan-node-autoreplace/pkg/aws"
+	"k8s.io/apimachinery/pkg/labels"
 	"xingzhan-node-autoreplace/pkg/config"
 	nirclient "xingzhan-node-autoreplace/pkg/generated/clientset/versioned"
 	nodeIssueReport "xingzhan-node-autoreplace/pkg/generated/informers/externalversions/nodeIssueReport/v1alpha1"
@@ -111,122 +112,50 @@ func (n *NIRController) nodeUpdateHandler(oldObj interface{}, newObj interface{}
 
 	if !oldReady && newReady && isNewNodeBecomeReady {
 		n.logger.Infoln("New node joined and ready:", newNodeObj.Name)
-		select {
-		case newNodeChan <- newNodeObj.Name:
-			n.logger.Infoln("Sent node  to newNodeChan", newNodeObj.Name)
-		default:
-			n.logger.Warningf("newNodeChan blocked, failed to send %s", newNodeObj.Name)
+		if n.ifNeedAddToChan(newNodeObj) {
+			select {
+				case newNodeChan <- newNodeObj.Name:
+					n.logger.Infoln("Sent node  to newNodeChan", newNodeObj.Name)
+				default:
+					n.logger.Warningf("newNodeChan blocked, failed to send %s", newNodeObj.Name)
+			}
 		}
+
 	}
 }
 
-// func (n *NIRController) cordonNode(nodename string) error {
+func (n *NIRController) ifNeedAddToChan(newNodeObj *v1.Node) bool {
+	// add logic to determin if the newready node is expected to add to channel:
+	nodeIssueReportlist, err := n.nodeIssueReportLister.List(labels.Everything())
+	if err != nil {
+		n.logger.Errorln("failed to list NodeIssueReport resources when check if need add to chan:", err)
+		return false
+	}
+	if nodeIssueReportlist == nil || len(nodeIssueReportlist) == 0 {
+		n.logger.Infoln("no NodeIssueReport resources exist, no need to add new node to chan:", newNodeObj.Name)
+		return false
+	}
+	for _, nodeIssueReport := range nodeIssueReportlist {
+		if nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseDetached {
+			oldNodeObj, err := n.nodelister.Get(nodeIssueReport.Spec.NodeName)
+			if err != nil {
+				n.logger.Errorln("failed to get old node object when check if need add to chan:", err)	
+				continue			
+			}
+			if !n.checkIfNewnodeExpected(oldNodeObj, newNodeObj) {
+				n.logger.Infoln("the new node is not expected node for replacement, skip it:", newNodeObj.Name)
+				continue
+			}
+			n.logger.Infoln("there is NodeIssueReport resource in detached phase, this new node is what we expect, need to add new node to chan:", newNodeObj.Name)
+			return true
+		}
+	}
+	return false
+}
 
-// 	ctx := context.TODO()
-// 	nodeobj, err := n.kubeclient.CoreV1().Nodes().Get(ctx, nodename, metav1.GetOptions{})
-// 	if err != nil {
-// 		n.logger.Errorln("failed to get node when trying to cordon node", err)
-// 		return err
-// 	}
-// 	if nodeobj.Spec.Unschedulable {
-// 		n.logger.Infoln("Node  is already unschedulable", nodename)
-// 		return nil
-// 	}
-// 	nodeobj.Spec.Unschedulable = true
 
-// 	_, err = n.kubeclient.CoreV1().Nodes().Update(ctx, nodeobj, metav1.UpdateOptions{})
-// 	if err != nil {
-// 		n.logger.Errorln("failed to cordon node when trying to cordon update node", err)
-// 		return err
-// 	}
-// 	return nil
-
-// }
-
-// func (n *NIRController) listPodOnNodes(nodename string) ([]v1.Pod, error) {
-// 	ctx := context.TODO()
-
-// 	podlist, err := n.kubeclient.CoreV1().Pods("").List(ctx, metav1.ListOptions{
-// 		FieldSelector: "spec.nodeName=" + nodename,
-// 	})
-// 	if err != nil {
-// 		//n.logger.Errorln("when drain node, failed to list pod on nodes", err)
-// 		return nil, err
-// 	}
-// 	return podlist.Items, nil
-// }
-
-// func (n *NIRController) evictPod(pod v1.Pod) error {
-// 	ctx := context.TODO()
-
-// 	eviction := &policyv1beta1.Eviction{
-// 		ObjectMeta: metav1.ObjectMeta{
-// 			Name:      pod.Name,
-// 			Namespace: pod.Namespace,
-// 		},
-// 	}
-
-// 	err := n.kubeclient.CoreV1().Pods(pod.Namespace).Evict(ctx, eviction)
-// 	if err != nil {
-// 		//n.logger.Errorln("failed to evict pod when trying to evict pod", pod.Name, pod.Namespace, err)
-// 		return err
-// 	}
-// 	return nil
-
-// }
-
-// func (n *NIRController) isDaemonset(pod v1.Pod) bool {
-// 	ownerlist := pod.OwnerReferences
-// 	for _, owner := range ownerlist {
-// 		if owner.Kind == "DaemonSet" {
-// 			return true
-// 		}
-// 	}
-// 	return false
-// }
-
-// func (n *NIRController) isSelfPod(pod v1.Pod) bool {
-
-// 	if pod.Name == n.selfpodname && pod.Namespace == n.selfpodnamespace && pod.Spec.NodeName == n.selfnodename {
-// 		n.logger.Info("controller itself pod, skipped")
-// 		return true
-// 	}
-// 	return false
-
-// }
 
 func (n *NIRController) drainNode(nodeobj v1.Node) error {
-
-	//1. cordon node
-	//2. list pods
-	//3. evict none ds pods
-
-	//1. cordon node
-	// err := n.cordonNode(nodename)
-	// if err != nil {
-	// 	n.logger.Errorln("failed to drain node when trying to cordon node", err)
-	// 	return err
-	// }
-
-	// //2. list pods
-	// podlist, err := n.listPodOnNodes(nodename)
-	// if err != nil {
-	// 	n.logger.Errorln("when drain node, failed to list pod on nodes", err)
-	// }
-
-	// //3. evict none ds pods
-	// for _, pod := range podlist {
-	// 	//if pod.ObjectMeta.OwnerReferences != "DaemonSet" {
-	// 	//	n.evictPod(pod)
-	// 	//}
-	// 	if !n.isDaemonset(pod) && !n.isSelfPod(pod) {
-	// 		err := n.evictPod(pod)
-	// 		if err != nil {
-	// 			n.logger.Errorln("failed to evict pod when trying to evict pod", pod.Name, pod.Namespace, err)
-	// 			return err
-	// 		}
-	// 	}
-	// }
 	drainer := &drain.Helper{
 		Ctx:                 context.Background(),
 		Client:              &n.kubeclient,
@@ -368,26 +297,31 @@ func (n *NIRController) processNextItem() bool {
 
 	if nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseDetached {
 
-
 		n.logger.Infoln("[node detached phase] Waiting for new node joining .....")
 		select {
 		case newNodeName := <-newNodeChan:
 			n.logger.Infoln("[node detached phase] New node ready:", newNodeName)
 
 			// fix Bug: if manually scale up node group, new node join in cluster, this channel will receive the new node name, but this new node is not the replacing node we are looking for,  should skip it
-			newnodeobj, err := n.kubeclient.CoreV1().Nodes().Get(context.TODO(), newNodeName, metav1.GetOptions{})
-			if err != nil {
-				n.logger.Errorln("[node detached phase] fail to get new node object when trying to drain node:", newNodeName, "with error:", err)
-				n.queue.AddRateLimited(key)
-				return true
-			}
-			isNewNodeBecomeReadycheck := time.Since(newnodeobj.ObjectMeta.CreationTimestamp.Time) <= 15*time.Minute
+			// newnodeobj, err := n.kubeclient.CoreV1().Nodes().Get(context.TODO(), newNodeName, metav1.GetOptions{})
+			// if err != nil {
+			// 	n.logger.Errorln("[node detached phase] fail to get new node object when trying to drain node:", newNodeName, "with error:", err)
+			// 	n.queue.AddRateLimited(key)
+			// 	return true
+			// }
 
-			if !isNewNodeBecomeReadycheck {
-				n.logger.Infoln("[node detached phase] the new node is not created recently, may be an old node become ready again, just skip it:", newNodeName)
-				n.queue.AddRateLimited(key)
-				return true
-			}
+			// fix bug: to check if the new ready node is expected node for replacement
+			// if !n.checkIfNewnodeExpected(nodeobj, newnodeobj) {
+			// 	n.queue.AddRateLimited(key)
+			// 	return true
+			// }
+			// isNewNodeBecomeReadycheck := time.Since(newnodeobj.ObjectMeta.CreationTimestamp.Time) <= 15*time.Minute
+
+			// if !isNewNodeBecomeReadycheck {
+			// 	n.logger.Infoln("[node detached phase] the new node is not created recently, may be an old node become ready again, just skip it:", newNodeName)
+			// 	n.queue.AddRateLimited(key)
+			// 	return true
+			// }
 
 			nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseNewJoined
 			if _, err = n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.TODO(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
@@ -521,9 +455,9 @@ func (n *NIRController) processNextItem() bool {
 		}
 		nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseRebooted
 
-		if _ , err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.TODO(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
+		if _, err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.TODO(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
 			n.logger.Errorln("[node reboot phase] faile to change phase to rebooted with error:", err)
-		}else {
+		} else {
 			n.logger.Infoln("[node reboot phase] successfully change to rebooted phase")
 		}
 
@@ -622,6 +556,25 @@ func (n *NIRController) processNextItem() bool {
 	}
 
 	return true
+}
+
+func (n *NIRController) checkIfNewnodeExpected(nodeobj *v1.Node, newnodeobj *v1.Node) bool {
+	// add logic to determin if the newready node is exptected node for replacement
+	isNewNodeBecomeReadycheck := time.Since(newnodeobj.ObjectMeta.CreationTimestamp.Time) <= 15*time.Minute
+
+	if !isNewNodeBecomeReadycheck {
+		n.logger.Infoln("[node detached phase] the new node is not created recently, may be an old node become ready again, just skip it:", newnodeobj.Name)
+		return false
+	}
+
+	newnodelables := newnodeobj.GetLabels()
+	oldnodelabels := nodeobj.GetLabels()
+	if newnodelables["eks.amazonaws.com/nodegroup"] != oldnodelabels["eks.amazonaws.com/nodegroup"] {
+		n.logger.Infoln("[node detached phase] the new node's nodegroup label is different from old node, is not the node we expepct", newnodeobj.Name)
+		return false
+	}
+	return true
+
 }
 
 func (n *NIRController) worker() {
