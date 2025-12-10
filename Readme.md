@@ -103,6 +103,28 @@ IAM role 的权限配置：您可以使用如下 Managed Policy：
 [AmazonSNSFullAccess](https://docs.aws.amazon.com/zh_cn/aws-managed-policy/latest/reference/AmazonSNSFullAccess.html)
 [AutoScalingFullAccess](https://docs.aws.amazon.com/zh_cn/aws-managed-policy/latest/reference/AutoScalingFullAccess.html)
 
+创建 IAM 策略，IAM role 最小权限如下：
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "Statement1",
+            "Effect": "Allow",
+            "Action": [
+                "ec2:RebootInstances",
+                "ec2:DescribeInstances",
+                "autoscaling:DetachInstances",
+                "sns:Publish"
+            ],
+            "Resource": [
+                "*"
+            ]
+        }
+    ]
+}
+```
+
 IRSA 的创建方式您可以参考： https://docs.amazonaws.cn/eks/latest/userguide/iam-roles-for-service-accounts.html
 
 
