@@ -155,6 +155,15 @@ func (c *NodeController) processNextItemDelayqueue() bool {
 
 	nodeobj, err := c.nodeLister.Get(key)
 	if err != nil {
+		if errors.IsNotFound(err) {
+			c.logger.Infoln("Node", key, "not found, maybe deleted, no need to process further")
+			if err = c.nirclient.NodeissuereporterV1alpha1().NodeIssueReports("default").Delete(context.TODO(), key, metav1.DeleteOptions{}); err != nil {
+				c.logger.Errorln("failed to delete node issue report after node recovered to ready status, need to delete node issue report manually", err)
+				c.requeueDelayAfter(key, err)
+				return true
+			}
+			return true
+		}
 		c.logger.Error("Failed to get node from lister:", err)
 		c.requeueDelayAfter(key, err)
 		return true
