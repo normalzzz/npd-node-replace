@@ -71,9 +71,12 @@ func (c *EventController) constructNodeIssueReport(event *corev1.Event) nodeIssu
 	//}
 
 	nodeprolems := make(map[string]nodeIssueReportv1alpha1.ProblemRecord)
+	messageentry := nodeIssueReportv1alpha1.MessageEntry{
+			Timestamp: event.LastTimestamp,
+			Message:   event.Message,
+		}
 	nodeprolems[event.Reason] = nodeIssueReportv1alpha1.ProblemRecord{
-		Count:   1,
-		Message: []string{event.Message},
+		Message: []nodeIssueReportv1alpha1.MessageEntry{messageentry},
 	}
 
 	return nodeIssueReportv1alpha1.NodeIssueReport{
@@ -109,13 +112,20 @@ func (c *EventController) updateNodeIssueReport(nodeissuereport *nodeIssueReport
 
 	nodeprolems, exist := nodeissuereport.Spec.NodeProblems[event.Reason]
 	if exist {
-		nodeprolems.Count += 1
-		nodeprolems.Message = append(nodeprolems.Message, event.Message)
+		// nodeprolems.Count += 1
+		messageentry := nodeIssueReportv1alpha1.MessageEntry{
+			Timestamp: event.LastTimestamp,
+			Message:   event.Message,
+		}
+		nodeprolems.Message = append(nodeprolems.Message, messageentry)
 		nodeissuereport.Spec.NodeProblems[event.Reason] = nodeprolems
 	} else {
+		messageentry := nodeIssueReportv1alpha1.MessageEntry{
+			Timestamp: event.LastTimestamp,
+			Message:   event.Message,
+		}
 		nodeissuereport.Spec.NodeProblems[event.Reason] = nodeIssueReportv1alpha1.ProblemRecord{
-			Count:   1,
-			Message: []string{event.Message},
+			Message: []nodeIssueReportv1alpha1.MessageEntry{messageentry},
 		}
 	}
 	_, err := c.nirclient.NodeissuereporterV1alpha1().NodeIssueReports(nodeissuereport.Namespace).Update(context.Background(), nodeissuereport, metav1.UpdateOptions{})

@@ -59,12 +59,16 @@ type NodeIssueReportList struct {
 
 type ProblemRecord struct {
 	//Reason string `json:"reason"`
-	Count   int32    `json:"count"`
-	Message []string `json:"message"`
+	// Count   int32    `json:"count"`
+	Message []MessageEntry `json:"messages"`
+}
+
+type MessageEntry struct {
+	Timestamp metav1.Time `json:"timestamp"`
+	Message   string      `json:"message"`
 }
 
 type Action string
-
 const (
 	Reboot  Action = "reboot"
 	Replace Action = "replace"
