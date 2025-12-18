@@ -44,6 +44,17 @@ type NodeController struct {
 	gracetime  time.Duration
 }
 
+func (c *NodeController) requeueDelayAfter(key string, err error) {
+    delay := c.gracetime / 2 
+
+    if errors.IsConflict(err) {
+        delay = 5 * time.Second 
+    }
+
+    c.logger.Warnf("Requeuing key %s after %v due to error: %v", key, delay, err)
+    c.delayqueue.AddAfter(key, delay)
+}
+
 func (c *NodeController) constructNodeIssueReportForNode(nodename string) *nodeIssueReportv1alpha1.NodeIssueReport {
 	nodeproblem := make(map[string]nodeIssueReportv1alpha1.ProblemRecord)
 
@@ -80,6 +91,11 @@ func (c *NodeController) isNodeReady(node *corev1.Node) bool {
 		}
 	}
 	return false
+}
+
+func (c *NodeController) requeue(key string) {
+	c.logger.Infoln("Requeuing key:", key)
+	c.queue.AddRateLimited(key)
 }
 
 func (c *NodeController) enqueue(obj interface{}) {
@@ -140,6 +156,7 @@ func (c *NodeController) processNextItemDelayqueue() bool {
 	nodeobj, err := c.nodeLister.Get(key)
 	if err != nil {
 		c.logger.Error("Failed to get node from lister:", err)
+		c.requeueDelayAfter(key, err)
 		return true
 	}
 	if !c.isNodeReady(nodeobj) {
@@ -147,12 +164,14 @@ func (c *NodeController) processNextItemDelayqueue() bool {
 		nodeissuereport, err := c.nodeIssueReportLister.NodeIssueReports("default").Get(nodeobj.Name)
 		if err != nil {
 			c.logger.Error("Failed to get node issue report from lister:", err)
+			c.requeueDelayAfter(key, err)
 			return true
 		}
 		nodeissuereport.Spec.Action = nodeIssueReportv1alpha1.Replace
 		_, err = c.nirclient.NodeissuereporterV1alpha1().NodeIssueReports("default").Update(context.Background(), nodeissuereport, metav1.UpdateOptions{})
 		if err != nil {
 			c.logger.Errorln("failed to update node issue report to set replace action", err)
+			c.requeueDelayAfter(key, err)
 			return true
 		}
 
@@ -170,12 +189,14 @@ func (c *NodeController) processNextItemDelayqueue() bool {
 			// nodeissuereport.Spec.Action = nodeIssueReportv1alpha1.None
 			_, err = c.nirclient.NodeissuereporterV1alpha1().NodeIssueReports("default").Update(context.Background(), nodeissuereport, metav1.UpdateOptions{})
 			if err != nil {
-				c.logger.Errorln("failed to update node issue report to set replace action", err)
+				c.logger.Errorln("failed to update node issue report to set ready status", err)
+				c.requeueDelayAfter(key, err)
 				return true
 			}
 		}else {
 			if err = c.nirclient.NodeissuereporterV1alpha1().NodeIssueReports("default").Delete(context.TODO(), nodeissuereport.Name, metav1.DeleteOptions{}); err != nil {
 				c.logger.Errorln("failed to delete node issue report after node recovered to ready status, need to delete node issue report manually", err)
+				c.requeueDelayAfter(key, err)
 				return true
 			}
 			c.logger.Infoln("deleted node issue report resource for node", nodeobj.Name, "as node recovered to ready status and no issue recorded")
@@ -215,11 +236,13 @@ func (c *NodeController) processNextItem() bool {
 	_, name, err := cache.SplitMetaNamespaceKey(key)
 	if err != nil {
 		c.logger.Errorln("fail to split the key:", key)
+		c.requeue(key)
 		return true
 	}
 	nodeobj, err := c.nodeLister.Get(name)
 	if err != nil {
 		c.logger.Error("Failed to get node from lister:", err)
+		c.requeue(key)
 		return true
 	}
 	nodename := nodeobj.Name
@@ -232,6 +255,7 @@ func (c *NodeController) processNextItem() bool {
 		_, err = c.nirclient.NodeissuereporterV1alpha1().NodeIssueReports("default").Create(context.Background(), nir, metav1.CreateOptions{})
 		if err != nil {
 			c.logger.Errorln("failed to create node issue report", err)
+			c.requeue(key)
 			return true
 		}
 
@@ -245,6 +269,7 @@ func (c *NodeController) processNextItem() bool {
 	err = c.updateNodeIssueReport(nodeissuereport)
 	if err != nil {
 		c.logger.Errorln("failed to update node issue report", err)
+		c.requeue(key)
 		return true
 	}
 

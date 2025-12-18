@@ -144,6 +144,7 @@ func (c *EventController) processNextItem() bool {
 	event, err := c.EventLister.Events(namespace).Get(name)
 	if err != nil {
 		c.logger.Errorln("failed to get event from key", err)
+		c.requeue(key)
 		return true
 	}
 
@@ -166,6 +167,7 @@ func (c *EventController) processNextItem() bool {
 		_, err = c.nirclient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Create(context.Background(), &nodeissuereport, metav1.CreateOptions{})
 		if err != nil {
 			c.logger.Errorln("failed to create node issue report", err)
+			c.requeue(key)
 			return true
 		}
 		c.logger.Infoln("created node Issue Report resource for node,", nodename)
@@ -175,15 +177,10 @@ func (c *EventController) processNextItem() bool {
 	err = c.updateNodeIssueReport(nodeissuereport, event)
 	if err != nil {
 		c.logger.Errorln("failed to update node issue report", err)
+		c.requeue(key)
 		return true
 	}
 
-	// 3. if there is no node issue report, create a new one
-	// 4. if there is a node issue report, update the node issue report
-
-	// avoid duplicate event retrieval
-
-	// TODO: handle the queued event key
 	return true
 
 }
@@ -212,6 +209,10 @@ func (c *EventController) Run(stopCh <-chan struct{}) {
 	}
 
 	<-stopCh
+}
+func (c *EventController) requeue(key string) {
+	c.logger.Infoln("Requeuing key:", key)
+	c.queue.AddRateLimited(key)
 }
 
 func (c *EventController) enqueu(obj interface{}) {
