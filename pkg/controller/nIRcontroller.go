@@ -518,8 +518,16 @@ func (n *NIRController) processNextItem() bool {
 		// get the tolerance config for specific senario
 		n.logger.Infoln("travesal all node problems, current problem", problemname)
 		tolerancecount := n.toleranceConfig.ToleranceCollection[problemname]
+		timewindows := time.Duration(tolerancecount.TimeWindowInMinutes) * time.Minute
+		count := 0
+		for _, messagerecord := range problem.Message{
+			if time.Since(messagerecord.Timestamp.Time) <= timewindows{
+				count++
+			}
+		}
+		n.logger.Info("within time window, deletected problem count is :", count)
 
-		if tolerancecount.Times <= problem.Count {
+		if tolerancecount.Times <= int32(count) {
 			//nodeIssueReport.Spec.Action = true
 			toleranceAction := tolerancecount.Action
 			if toleranceAction == config.ActionReboot {

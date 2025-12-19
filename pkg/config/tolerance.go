@@ -22,6 +22,8 @@ type Tolerance struct {
 	Times int32 `json:"times"`
 
 	Action Action `json:"action"`
+
+	TimeWindowInMinutes int32 `json:"timewindowinminutes"`
 }
 
 type ToleranceCollection struct {
