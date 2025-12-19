@@ -48,17 +48,24 @@ spec:
               nodeproblems:
                 additionalProperties:
                   properties:
-                    count:
-                      description: Reason string `json:"reason"`
-                      format: int32
-                      type: integer
-                    message:
+                    messages:
+                      description: |-
+                        Reason string `json:"reason"`
+                        Count   int32    `json:"count"`
                       items:
-                        type: string
+                        properties:
+                          message:
+                            type: string
+                          timestamp:
+                            format: date-time
+                            type: string
+                        required:
+                        - message
+                        - timestamp
+                        type: object
                       type: array
                   required:
-                  - count
-                  - message
+                  - messages
                   type: object
                 type: object
               nodestatus:
