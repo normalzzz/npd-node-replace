@@ -10,5 +10,5 @@ roleRef:
   name: '{{ include "npd-node-replace.fullname" . }}-clusterrole'
 subjects:
 - kind: ServiceAccount
-  name: '{{ include "npd-node-replace.fullname" . }}-sa'
+  name: npd-node-replace-sa
   namespace: '{{ .Release.Namespace }}'

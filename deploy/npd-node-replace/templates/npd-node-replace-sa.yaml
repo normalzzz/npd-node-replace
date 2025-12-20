@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: {{ include "npd-node-replace.fullname" . }}-sa
+  name: npd-node-replace-sa
   namespace: {{ .Release.Namespace }}
   labels:
   {{- include "npd-node-replace.labels" . | nindent 4 }}

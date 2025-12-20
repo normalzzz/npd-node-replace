@@ -68,21 +68,33 @@ Tolerance 配置中可以配置对于某些问题发生问题的容忍次数，�
 ```json
 {
   "tolerancecollection": {
-    "OOMKilling": {
+    "OOMKill": {
       "times": 2,
-      "action": "reboot"
+      "action": "reboot",
+      "timewindowinminutes": 30
     },
-    "KernelOops": {
+    "KernelHang": {
       "times": 3,
-      "action": "replace"
+      "action": "replace",
+      "timewindowinminutes": 60
     }
   }
 }
 ```
-使用该配置，可以实现在触发两次 OOMKill 事件之后重启节点，在触发三次 KernelOops 事件之后，替换节点。
+使用该配置，可以实现在30分钟内触发两次 OOMKill 事件之后重启节点，在60分钟内触发三次 KernelOops 事件之后，替换节点。
 由于事件为 Node Problem Detector 组件发出，关于所有支持的事件类型，可以参考 [Node Problem Detector config](https://github.com/kubernetes/node-problem-detector/tree/master/config)
+Tolerance 配置字段解释：
+```json
+"tolerancecollection": {
+    "OOMKill": {  // 事件类型
+      "times": 2,  // 在指定窗口期内发生的次数
+      "action": "reboot",  // 对于某种事件类型发生次数超过阈值时，应该采取的操作
+      "timewindowinminutes": 30  // 时间窗口大小
+    },
+```
 
 根据您的 Tolerance 配置需要修改 [tolerance configmap](https://github.com/normalzzz/npd-node-replace/blob/main/deploy/tolerance-configmap.yaml)
+
 
 ### IAM 权限配置：
 npd-node-replace 组件需要结合 Amazon EC2、Amazon Autoscaling group 、Amazon SNS 服务，您需要为其配置权限。 
@@ -98,11 +110,6 @@ metadata:
   name: npd-node-replace-sa
   namespace: kube-system
 ```
-IAM role 的权限配置：您可以使用如下 Managed Policy：
-[AmazonEC2FullAccess](https://docs.aws.amazon.com/zh_cn/aws-managed-policy/latest/reference/AmazonEC2FullAccess.html)
-[AmazonSNSFullAccess](https://docs.aws.amazon.com/zh_cn/aws-managed-policy/latest/reference/AmazonSNSFullAccess.html)
-[AutoScalingFullAccess](https://docs.aws.amazon.com/zh_cn/aws-managed-policy/latest/reference/AutoScalingFullAccess.html)
-
 创建 IAM 策略，IAM role 最小权限如下：
 ```json
 {
@@ -126,7 +133,6 @@ IAM role 的权限配置：您可以使用如下 Managed Policy：
 ```
 
 IRSA 的创建方式您可以参考： https://docs.amazonaws.cn/eks/latest/userguide/iam-roles-for-service-accounts.html
-
 
 ### npd-node-replace-deployment.yaml 配置：
 #### 环境变量配置：
@@ -158,7 +164,7 @@ kubectl apply -f deploy/tolerance-configmap.yaml
 kubectl apply -f deploy/npd-node-replace-deployment.yaml
 ```
 ### Helm 部署
-Helm package link : https://github.com/normalzzz/npd-node-replace/blob/main/deploy/npd-node-replace/npd-node-replace-0.1.0.tgz
+Helm package link : https://github.com/normalzzz/npd-node-replace/blob/main/deploy/npd-node-replace/npd-node-replace-0.1.1.tgz
 1. values.yaml 参数配置文件修改：
 ```yaml
 kubernetesClusterDomain: cluster.local
@@ -181,11 +187,13 @@ toleranceConfig:
       "tolerancecollection": {
         "OOMKilling": {
           "times": 2,
-          "action": "reboot"
+          "action": "reboot",
+          "timewindowinminutes": 30
         },
         "KernelOops": {
           "times": 3,
-          "action": "replace"
+          "action": "replace",
+          "timewindowinminutes": 60
         }
       }
     }

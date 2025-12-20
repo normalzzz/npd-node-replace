@@ -1,0 +1,86 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.1-0.20250916065210-6bb7e0623e95
+  name: nodeissuereports.nodeissuereporter.xingzhan.io
+spec:
+  group: nodeissuereporter.xingzhan.io
+  names:
+    kind: NodeIssueReport
+    listKind: NodeIssueReportList
+    plural: nodeissuereports
+    singular: nodeissuereport
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          NodeIssueReport is a specification for a NodeIssueReport resource
+          type Reason string
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: NodeIssueReportSpec is the spec for a NodeIssueReport resource
+            properties:
+              action:
+                type: string
+              nodename:
+                type: string
+              nodeproblems:
+                additionalProperties:
+                  properties:
+                    messages:
+                      description: |-
+                        Reason string `json:"reason"`
+                        Count   int32    `json:"count"`
+                      items:
+                        properties:
+                          message:
+                            type: string
+                          timestamp:
+                            format: date-time
+                            type: string
+                        required:
+                        - message
+                        - timestamp
+                        type: object
+                      type: array
+                  required:
+                  - messages
+                  type: object
+                type: object
+              nodestatus:
+                type: string
+              phase:
+                type: string
+            required:
+            - action
+            - nodename
+            - nodeproblems
+            - nodestatus
+            - phase
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true

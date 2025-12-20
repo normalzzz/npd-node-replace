@@ -48,7 +48,7 @@ spec:
           name: config-volume
           readOnly: true
           subPath: tolerance.json
-      serviceAccount: {{ include "npd-node-replace.fullname" . }}-sa
+      serviceAccount: npd-node-replace-sa
       volumes:
       - configMap:
           name: {{ include "npd-node-replace.fullname" . }}-tolerance-config

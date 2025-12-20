@@ -5,7 +5,7 @@ npdNodeReplace:
       snsTopicArn: <SNS topic arn>
       nodeDoubleCheckGraceTime: 5
     image:
-      repository: zxxxxzz/npd-node-replace:v1
+      repository: zxxxxzz/npd-node-replace
       tag: v1
     imagePullPolicy: Always
   replicas: 1
@@ -19,11 +19,13 @@ toleranceConfig:
       "tolerancecollection": {
         "OOMKilling": {
           "times": 2,
-          "action": "reboot"
+          "action": "reboot",
+          "timewindowinminutes": 30
         },
         "KernelOops": {
           "times": 3,
-          "action": "replace"
+          "action": "replace",
+          "timewindowinminutes": 60
         }
       }
     }
