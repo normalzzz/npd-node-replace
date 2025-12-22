@@ -517,7 +517,12 @@ func (n *NIRController) processNextItem() bool {
 	for problemname, problem := range problems {
 		// get the tolerance config for specific senario
 		n.logger.Infoln("travesal all node problems, current problem", problemname)
-		tolerancecount := n.toleranceConfig.ToleranceCollection[problemname]
+		tolerancecount, exist := n.toleranceConfig.ToleranceCollection[problemname]
+		if !exist {
+			n.logger.Infoln("no tolerance config for problem:", problemname, "skip it")
+			continue
+		}
+
 		timewindows := time.Duration(tolerancecount.TimeWindowInMinutes) * time.Minute
 		count := 0
 		for _, messagerecord := range problem.Message{
