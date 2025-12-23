@@ -1,5 +1,5 @@
 # 简介
-npd-node-replace 组件用于缓解当前 Amazon EKS 在中国区未上线的 Auto Repire 导致 EKS 集群中的问题节点无法被及时处理的痛点，仅用于中国区 Amazon EKS，对于 global 区域建议使用 [node auto repair](https://docs.aws.amazon.com/eks/latest/userguide/node-health.html)
+npd-node-replace 组件用于缓解当前 Amazon EKS 在中国区EKS 集群中的问题节点无法被及时处理的痛点，仅用于中国区 Amazon EKS，对于 global 区域建议使用 [node auto repair](https://docs.aws.amazon.com/eks/latest/userguide/node-health.html)
 npd-node-replace 的主要功能如下：
 1. 侦听来自 npd 的关于节点问题的报告事件
 2. 将节点的问题事件记录在 NodeIssueReport 中
@@ -7,7 +7,7 @@ npd-node-replace 的主要功能如下：
 4. 通知集群 Admin 节点上发生的历史问题事件
 5. 监控节点状态，当节点状态为 NotReady 时，进行节点替换，（节点的替换操作依赖于针对节点的两次状态检查，在节点状态由 Ready 变为 Notready 三分钟之后，会再次检查节点的状态，若节点状态仍为 Notready，则会进行节点替换，若节点状态变为 Ready ，则认为节点正常）
 6. 若您仅希望 npd-node-replace 组件对节点问题和状态进行监控，而不进行 reboot 或 replace 操作，可以使用 "npd-node-replace-disabled=true" 标签来对该节点禁用 npd-node-replace 组件的操作。`kubectl label nodes <node name> npd-node-replace-disabled=true` 
-
+7. 代码结构详解：https://deepwiki.com/normalzzz/npd-node-replace
 
 ## **重要**（使用之前请重点阅读）
 - npd-node-replace 组件仅侦听 EKS 托管节点组中节点的事件， 不会处理 Karpenter 节点问题
