@@ -13,7 +13,7 @@ npd-node-replace 的主要功能如下：
 - npd-node-replace 组件仅侦听 EKS 托管节点组中节点的事件， 不会处理 Karpenter 节点问题
 - npd-node-replace 组件属于个人项目，并不属于 Amazon Web Service 中国区，如果遇到问题请提交 [Issue](https://github.com/normalzzz/npd-node-replace/issues), issue 会被及时处理
 - npd-node-replace 组件当前仍处于测试开发阶段，请在详尽的测试和考虑之后使用在 EKS 集群中。
-- 推荐将 npd-node-replace 组件部署在 fargate 计算资源上，关于[如何在 EKS 使用 fargate 可以参考文档](https://docs.amazonaws.cn/eks/latest/userguide/fargate-getting-started.html)
+- 请将 npd-node-replace 组件部署在 fargate 计算资源上，关于[如何在 EKS 使用 fargate 可以参考文档](https://docs.amazonaws.cn/eks/latest/userguide/fargate-getting-started.html)
 - npd-node-replace 组件的 reboot 和 replace 组件都会进行节点 drain 操作，若发现 Pod 驱逐失败的问题，请检查集群中 [PDB 配置](https://kubernetes.io/docs/tasks/run-application/configure-pdb/)，例如 coredns pod 组件存在 PDB 配置若您集群的 coredns pod 都处于同一节点上，推荐使用  "npd-node-replace-disabled=true" 标签来对该节点禁用 npd-node-replace 组件的 replace 和 reboot 操作，
 - 关于 coredns pod 的配置，在测试环境中发现了已知问题：
   1. 当 coredns 组件被 PDB 保护（默认 MaxUnavailable=1 ）但是其余节点没有容量调度 Coredns pod，则会造成 coredns pod 的调度失败， reboot 或者 replace 操作之前的 drain 操作会失败，导致整个 reboot 和 replace 流程停滞
