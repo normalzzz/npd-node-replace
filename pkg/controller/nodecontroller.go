@@ -84,13 +84,14 @@ func (c *NodeController) updateNodeIssueReport(nir *nodeIssueReportv1alpha1.Node
 	return nil
 }
 
-func (c *NodeController) isNodeReady(node *corev1.Node) bool {
+func (c *NodeController) checknodestatus(node *corev1.Node) (corev1.ConditionStatus, bool) {
 	for _, condition := range node.Status.Conditions {
 		if condition.Type == corev1.NodeReady {
-			return condition.Status == corev1.ConditionTrue
+			return condition.Status, true
 		}
 	}
-	return false
+	// return false
+	return corev1.ConditionUnknown, false
 }
 
 func (c *NodeController) requeue(key string) {
@@ -130,9 +131,18 @@ func (c *NodeController) nodeUpdateHandler(oldObj, newObj interface{}) {
 		return
 	}
 
-	if !c.isNodeReady(newNode) && c.isNodeReady(oldNode) {
-		c.logger.Infof("Node %s change to not ready status", newNode.Name)
-		c.enqueue(newNode)
+	// if !c.isNodeReady(newNode) && c.isNodeReady(oldNode) {
+	// 	c.logger.Infof("Node %s change to not ready status", newNode.Name)
+	// 	c.enqueue(newNode)
+	// }
+	oldNodeStatus, oldFound := c.checknodestatus(oldNode)
+	newNodeStatus, newFound := c.checknodestatus(newNode)
+
+	if newFound && oldFound {
+		if newNodeStatus != corev1.ConditionTrue && oldNodeStatus == corev1.ConditionTrue {
+			c.logger.Infof("Node %s change to not ready status", newNode.Name)
+			c.enqueue(newNode)
+		}
 	}
 }
 
@@ -168,14 +178,24 @@ func (c *NodeController) processNextItemDelayqueue() bool {
 		c.requeueDelayAfter(key, err)
 		return true
 	}
-	if !c.isNodeReady(nodeobj) {
+	if status, _ := c.checknodestatus(nodeobj); status != corev1.ConditionTrue {
 		c.logger.Warnln("Node", nodeobj.Name, "failed the second time status check, update the node issue report resource to perform node replace action", time.Now())
 		nodeissuereport, err := c.nodeIssueReportLister.NodeIssueReports("default").Get(nodeobj.Name)
 		if err != nil {
+			if errors.IsNotFound(err) {
+				c.logger.Infoln("no node issue report found for the node: ", nodeobj.Name, " maybe deleted meanwhile, no need to process further")
+				return true
+			}
 			c.logger.Error("Failed to get node issue report from lister:", err)
 			c.requeueDelayAfter(key, err)
 			return true
 		}
+		// notice here
+		if status, _ := c.checknodestatus(nodeobj); status == corev1.ConditionUnknown{
+			c.logger.Infoln("Node", nodeobj.Name, "status is unknown, set force replace action directly")
+			nodeissuereport.Spec.NodeStatus = nodeIssueReportv1alpha1.NodeUnknownStatus 
+		}
+
 		nodeissuereport.Spec.Action = nodeIssueReportv1alpha1.Replace
 		_, err = c.nirclient.NodeissuereporterV1alpha1().NodeIssueReports("default").Update(context.Background(), nodeissuereport, metav1.UpdateOptions{})
 		if err != nil {

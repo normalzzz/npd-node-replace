@@ -39,6 +39,7 @@ type NodeIssueReportSpec struct {
 	NodeProblems map[string]ProblemRecord `json:"nodeproblems"`
 	NodeStatus   NodeStatus               `json:"nodestatus"`
 	Action       Action                   `json:"action"`
+	// ForceAction  bool                     `json:"force"`
 	Phase 		 Phase 					  `json:"phase"`
 }
 
@@ -76,8 +77,9 @@ const (
 )
 
 const (
-	NodeNotReadyStatus   = "NotReady"
+	NodeNotReadyStatus NodeStatus  = "NotReady"
 	NodeReadyStatus   NodeStatus = "Ready"
+	NodeUnknownStatus NodeStatus = "Unknown"
 )
 
 type NodeStatus string
