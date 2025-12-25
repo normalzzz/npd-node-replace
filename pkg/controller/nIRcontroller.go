@@ -504,43 +504,45 @@ func (n *NIRController) processNextItem() bool {
 	if nodeIssueReport.Spec.Action != nodeIssueReportv1alpha1.None {
 		// TODO add logic to exclude node with label "npd-node-replace-disabled=true"
 		nodelabelmap := nodeobj.GetLabels()
-		if val, exists := nodelabelmap["npd-node-replace-disabled"]; exists {
-			if val == "true" {
-				n.logger.Infoln("node has label npd-node-replace-disabled=true, user don't want to auto replace/reboot this node, just skip it:", nodename)
-				if err := n.awsOperator.SNSNotify(*nodeIssueReport, true); err != nil {
-					n.logger.Error("[node problem detected, skip node] failed to notify admin when node has npd-node-replace-disabled=true label", err)
-					n.queue.AddRateLimited(key)
-					return true
-				} else {
-					n.logger.Infoln("[node problem detected, skip node] successfully notified admin that node has npd-node-replace-disabled=true label:", nodename)
+		if val, exists := nodelabelmap["npd-node-replace-enabled"]; !exists || val != "true" {
+			n.logger.Infoln("node don't has label npd-node-replace-enabled=true, user don't want to auto replace/reboot this node, just skip it:", nodename)
+			if err := n.awsOperator.SNSNotify(*nodeIssueReport, true); err != nil {
+				n.logger.Error("[node problem detected, skip node] failed to notify admin when node has npd-node-replace-enabled=true label", err)
+				n.queue.AddRateLimited(key)
+				return true
+			} else {
+				n.logger.Infoln("[node problem detected, skip node] successfully notified admin that node has npd-node-replace-enabled=true label:", nodename)
+			}
+			if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Delete(context.TODO(), nodeIssueReport.Name, metav1.DeleteOptions{}); err != nil {
+				n.logger.Errorln("[node problem detected, skip node] faild to delete nodeIssueReport", nodeIssueReport.Name, "with error:", err)
+				n.queue.AddRateLimited(key)
+				return true
+			} else {
+				n.logger.Infoln("[node problem detected, skip node] node has labeled npd-node-replace-enabled=true, deleted nodeIssueReport:", nodeIssueReport.Name)
+			}
+			return true
+			
+		}else {
+			n.logger.Infoln("node has label npd-node-replace-enabled=true, user allow auto replace/reboot this node, continue process:", nodename)
+			n.logger.Infoln("problem on node is not tolerated by user, do something")
+			if nodeIssueReport.Spec.Action == nodeIssueReportv1alpha1.Reboot && nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseNone {
+				//TODO aws reboot action logic
+				nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseReboot
+				if _, err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.TODO(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
+					n.logger.Errorln("[node none phase]  failed to change the phase to phase reboot, with error:", err)
 				}
-				if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Delete(context.TODO(), nodeIssueReport.Name, metav1.DeleteOptions{}); err != nil {
-					n.logger.Errorln("[node problem detected, skip node] faild to delete nodeIssueReport", nodeIssueReport.Name, "with error:", err)
-					n.queue.AddRateLimited(key)
-					return true
-				} else {
-					n.logger.Infoln("[node problem detected, skip node] node has labeled npd-node-replace-disabled=true, deleted nodeIssueReport:", nodeIssueReport.Name)
+				return true
+			} else if nodeIssueReport.Spec.Action == nodeIssueReportv1alpha1.Replace && nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseNone {
+				//TODO aws replace node logic
+				nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseReplace
+				if _, err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.TODO(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
+					n.logger.Errorln("[node none phase]  failed to change the phase to phase replace, with error:", err)
 				}
 				return true
 			}
 		}
 
-		n.logger.Infoln("problem on node is not tolerated by user, do something")
-		if nodeIssueReport.Spec.Action == nodeIssueReportv1alpha1.Reboot && nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseNone {
-			//TODO aws reboot action logic
-			nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseReboot
-			if _, err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.TODO(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
-				n.logger.Errorln("[node none phase]  failed to change the phase to phase reboot, with error:", err)
-			}
-			return true
-		} else if nodeIssueReport.Spec.Action == nodeIssueReportv1alpha1.Replace && nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseNone {
-			//TODO aws replace node logic
-			nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseReplace
-			if _, err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.TODO(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
-				n.logger.Errorln("[node none phase]  failed to change the phase to phase replace, with error:", err)
-			}
-			return true
-		}
+		
 
 	}
 
