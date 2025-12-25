@@ -73,8 +73,18 @@ func (c *NodeController) constructNodeIssueReportForNode(nodename string) *nodeI
 	}
 }
 
-func (c *NodeController) updateNodeIssueReport(nir *nodeIssueReportv1alpha1.NodeIssueReport) error {
-	nir.Spec.NodeStatus = nodeIssueReportv1alpha1.NodeNotReadyStatus
+func (c *NodeController) updateNodeIssueReport(nir *nodeIssueReportv1alpha1.NodeIssueReport, nodeobj *corev1.Node) error {
+	nodestatus, _:= c.checknodestatus(nodeobj)
+
+	switch nodestatus {
+	case corev1.ConditionUnknown:
+		nir.Spec.NodeStatus = nodeIssueReportv1alpha1.NodeUnknownStatus
+	case corev1.ConditionFalse:
+		nir.Spec.NodeStatus = nodeIssueReportv1alpha1.NodeNotReadyStatus
+	default:
+		nir.Spec.NodeStatus = nodeIssueReportv1alpha1.NodeReadyStatus
+	}
+	// nir.Spec.NodeStatus = nodeIssueReportv1alpha1.NodeNotReadyStatus
 
 	_, err := c.nirclient.NodeissuereporterV1alpha1().NodeIssueReports("default").Update(context.Background(), nir, metav1.UpdateOptions{})
 	if err != nil {
@@ -140,7 +150,7 @@ func (c *NodeController) nodeUpdateHandler(oldObj, newObj interface{}) {
 
 	if newFound && oldFound {
 		if newNodeStatus != corev1.ConditionTrue && oldNodeStatus == corev1.ConditionTrue {
-			c.logger.Infof("Node %s change to not ready status", newNode.Name)
+			c.logger.Infof("Node %s change to %s status", newNode.Name, newNodeStatus)
 			c.enqueue(newNode)
 		}
 	}
@@ -268,8 +278,13 @@ func (c *NodeController) processNextItem() bool {
 		c.requeue(key)
 		return true
 	}
+	// get the node object, if not found, maybe deleted, no need to process further
 	nodeobj, err := c.nodeLister.Get(name)
 	if err != nil {
+		if errors.IsNotFound(err) {
+			c.logger.Infoln("Node", key, "not found, maybe deleted, no need to process further")
+			return true
+		}
 		c.logger.Error("Failed to get node from lister:", err)
 		c.requeue(key)
 		return true
@@ -295,7 +310,7 @@ func (c *NodeController) processNextItem() bool {
 
 	c.logger.Infoln("updating NodeIssueReport for node:", nodeobj.Name, ":", key, time.Now())
 
-	err = c.updateNodeIssueReport(nodeissuereport)
+	err = c.updateNodeIssueReport(nodeissuereport, nodeobj)
 	if err != nil {
 		c.logger.Errorln("failed to update node issue report", err)
 		c.requeue(key)
