@@ -3,14 +3,17 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	// "errors"
 	"os"
 	"strings"
 	"time"
 	awspkg "xingzhan-node-autoreplace/pkg/aws"
-	"k8s.io/apimachinery/pkg/labels"
 	"xingzhan-node-autoreplace/pkg/config"
+	"k8s.io/apimachinery/pkg/api/errors"
 	nirclient "xingzhan-node-autoreplace/pkg/generated/clientset/versioned"
 	nodeIssueReport "xingzhan-node-autoreplace/pkg/generated/informers/externalversions/nodeIssueReport/v1alpha1"
+
+	"k8s.io/apimachinery/pkg/labels"
 
 	log "github.com/sirupsen/logrus"
 	v1 "k8s.io/api/core/v1"
@@ -153,9 +156,25 @@ func (n *NIRController) ifNeedAddToChan(newNodeObj *v1.Node) bool {
 	return false
 }
 
+func (n *NIRController) taintNoexecuteOnNode(nodeobj *v1.Node) error {
+	nodeobj.Spec.Taints = append(nodeobj.Spec.Taints, v1.Taint{
+		Effect: v1.TaintEffectNoExecute,
+		Key:   "npd-node-replace/taint",
+		Value: "unreachable",
+	},)
+	_, err := n.kubeclient.CoreV1().Nodes().Update(context.TODO(), nodeobj, metav1.UpdateOptions{})
+	if err != nil {
+		n.logger.Errorln("failed to taint NoExecute on node:", nodeobj.Name, "with error:", err)
+		return err
+	}
+	n.logger.Infoln("successfully tainted NoExecute on node:", nodeobj.Name)
+	return nil
+	
+}
 
 
-func (n *NIRController) drainNode(nodeobj v1.Node) error {
+
+func (n *NIRController) drainNode(nodeobj v1.Node, forcely bool) error {
 	drainer := &drain.Helper{
 		Ctx:                 context.Background(),
 		Client:              &n.kubeclient,
@@ -168,6 +187,22 @@ func (n *NIRController) drainNode(nodeobj v1.Node) error {
 		DeleteEmptyDirData:  true,
 	}
 
+	if forcely{
+		if err := drain.RunCordonOrUncordon(drainer, &nodeobj, true); err != nil {
+			n.logger.Errorln("failed to cordon node during drain operation", err)
+			return err
+		}
+		err := n.taintNoexecuteOnNode(&nodeobj)
+		if err != nil {
+			return err
+		}
+		// just try to drain the node once
+		_ = drain.RunNodeDrain(drainer, nodeobj.Name)
+		return nil
+
+
+	}
+	
 	if err := drain.RunCordonOrUncordon(drainer, &nodeobj, true); err != nil {
 		n.logger.Errorln("failed to cordon node during drain operation", err)
 		return err
@@ -209,6 +244,10 @@ func (n *NIRController) processNextItem() bool {
 
 	nodeobj, err := n.nodelister.Get(nodename)
 
+	if errors.IsNotFound(err) {
+		n.logger.Infoln("node object not found, may be already deleted:", nodename)
+		return true
+	}
 	if err != nil {
 		n.logger.Errorln("failed to get node object resource, process next time", err)
 		n.queue.AddRateLimited(key)
@@ -276,14 +315,28 @@ func (n *NIRController) processNextItem() bool {
 			n.queue.AddRateLimited(key)
 			return true
 		}
-		err = n.drainNode(*nodeobj)
-		if err != nil {
-			n.logger.Errorln("[node newnodejoined phase] fail to drain node:", err)
-			// TODO: when failed to drain node,  drain operation may be never happen again, because no new node will join, need to fix this
-			n.queue.AddRateLimited(key)
-			return true
+
+		// for notready node, do normal drain
+
+
+		// for unknown status node, do forcely drain
+		if nodeIssueReport.Spec.NodeStatus == nodeIssueReportv1alpha1.NodeUnknownStatus {
+			err = n.drainNode(*nodeobj, true)
+			if err != nil {
+				n.logger.Errorln("[node newnodejoined phase] fail to drain node forcely:", err)
+				n.queue.AddRateLimited(key)
+				return true
+			}
+		}else {
+			err = n.drainNode(*nodeobj, false)
+			if err != nil {
+				n.logger.Errorln("[node newnodejoined phase] fail to drain node:", err)
+				// TODO: when failed to drain node,  drain operation may be never happen again, because no new node will join, need to fix this
+				n.queue.AddRateLimited(key)
+				return true
+			}
 		}
-		n.logger.Infoln("[node newnodejoined phase] successfully drained node")
+		n.logger.Infoln("[node newnodejoined phase] successfully drained or deleted node")
 
 		nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseDrained
 		if _, err = n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.TODO(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
@@ -301,27 +354,6 @@ func (n *NIRController) processNextItem() bool {
 		select {
 		case newNodeName := <-newNodeChan:
 			n.logger.Infoln("[node detached phase] New node ready:", newNodeName)
-
-			// fix Bug: if manually scale up node group, new node join in cluster, this channel will receive the new node name, but this new node is not the replacing node we are looking for,  should skip it
-			// newnodeobj, err := n.kubeclient.CoreV1().Nodes().Get(context.TODO(), newNodeName, metav1.GetOptions{})
-			// if err != nil {
-			// 	n.logger.Errorln("[node detached phase] fail to get new node object when trying to drain node:", newNodeName, "with error:", err)
-			// 	n.queue.AddRateLimited(key)
-			// 	return true
-			// }
-
-			// fix bug: to check if the new ready node is expected node for replacement
-			// if !n.checkIfNewnodeExpected(nodeobj, newnodeobj) {
-			// 	n.queue.AddRateLimited(key)
-			// 	return true
-			// }
-			// isNewNodeBecomeReadycheck := time.Since(newnodeobj.ObjectMeta.CreationTimestamp.Time) <= 15*time.Minute
-
-			// if !isNewNodeBecomeReadycheck {
-			// 	n.logger.Infoln("[node detached phase] the new node is not created recently, may be an old node become ready again, just skip it:", newNodeName)
-			// 	n.queue.AddRateLimited(key)
-			// 	return true
-			// }
 
 			nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseNewJoined
 			if _, err = n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.TODO(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
@@ -431,7 +463,7 @@ func (n *NIRController) processNextItem() bool {
 		n.logger.Infoln("[node reboot phase] before do reboot action , get instance Id:", instanceId)
 
 		// Added logic to drain node before reboot node.
-		err = n.drainNode(*nodeobj)
+		err = n.drainNode(*nodeobj, false)
 		if err != nil {
 			n.logger.Errorln("[node reboot phase] fail to drain node:", err)
 			// TODO: when failed to drain node,  drain operation may be never happen again, because no new node will join, need to fix this
@@ -472,43 +504,45 @@ func (n *NIRController) processNextItem() bool {
 	if nodeIssueReport.Spec.Action != nodeIssueReportv1alpha1.None {
 		// TODO add logic to exclude node with label "npd-node-replace-disabled=true"
 		nodelabelmap := nodeobj.GetLabels()
-		if val, exists := nodelabelmap["npd-node-replace-disabled"]; exists {
-			if val == "true" {
-				n.logger.Infoln("node has label npd-node-replace-disabled=true, user don't want to auto replace/reboot this node, just skip it:", nodename)
-				if err := n.awsOperator.SNSNotify(*nodeIssueReport, true); err != nil {
-					n.logger.Error("[node problem detected, skip node] failed to notify admin when node has npd-node-replace-disabled=true label", err)
-					n.queue.AddRateLimited(key)
-					return true
-				} else {
-					n.logger.Infoln("[node problem detected, skip node] successfully notified admin that node has npd-node-replace-disabled=true label:", nodename)
+		if val, exists := nodelabelmap["npd-node-replace-enabled"]; !exists || val != "true" {
+			n.logger.Infoln("node don't has label npd-node-replace-enabled=true, user don't want to auto replace/reboot this node, just skip it:", nodename)
+			if err := n.awsOperator.SNSNotify(*nodeIssueReport, true); err != nil {
+				n.logger.Error("[node problem detected, skip node] failed to notify admin when node has npd-node-replace-enabled=true label", err)
+				n.queue.AddRateLimited(key)
+				return true
+			} else {
+				n.logger.Infoln("[node problem detected, skip node] successfully notified admin that node has npd-node-replace-enabled=true label:", nodename)
+			}
+			if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Delete(context.TODO(), nodeIssueReport.Name, metav1.DeleteOptions{}); err != nil {
+				n.logger.Errorln("[node problem detected, skip node] faild to delete nodeIssueReport", nodeIssueReport.Name, "with error:", err)
+				n.queue.AddRateLimited(key)
+				return true
+			} else {
+				n.logger.Infoln("[node problem detected, skip node] node has labeled npd-node-replace-enabled=true, deleted nodeIssueReport:", nodeIssueReport.Name)
+			}
+			return true
+			
+		}else {
+			n.logger.Infoln("node has label npd-node-replace-enabled=true, user allow auto replace/reboot this node, continue process:", nodename)
+			n.logger.Infoln("problem on node is not tolerated by user, do something")
+			if nodeIssueReport.Spec.Action == nodeIssueReportv1alpha1.Reboot && nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseNone {
+				//TODO aws reboot action logic
+				nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseReboot
+				if _, err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.TODO(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
+					n.logger.Errorln("[node none phase]  failed to change the phase to phase reboot, with error:", err)
 				}
-				if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Delete(context.TODO(), nodeIssueReport.Name, metav1.DeleteOptions{}); err != nil {
-					n.logger.Errorln("[node problem detected, skip node] faild to delete nodeIssueReport", nodeIssueReport.Name, "with error:", err)
-					n.queue.AddRateLimited(key)
-					return true
-				} else {
-					n.logger.Infoln("[node problem detected, skip node] node has labeled npd-node-replace-disabled=true, deleted nodeIssueReport:", nodeIssueReport.Name)
+				return true
+			} else if nodeIssueReport.Spec.Action == nodeIssueReportv1alpha1.Replace && nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseNone {
+				//TODO aws replace node logic
+				nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseReplace
+				if _, err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.TODO(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
+					n.logger.Errorln("[node none phase]  failed to change the phase to phase replace, with error:", err)
 				}
 				return true
 			}
 		}
 
-		n.logger.Infoln("problem on node is not tolerated by user, do something")
-		if nodeIssueReport.Spec.Action == nodeIssueReportv1alpha1.Reboot && nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseNone {
-			//TODO aws reboot action logic
-			nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseReboot
-			if _, err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.TODO(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
-				n.logger.Errorln("[node none phase]  failed to change the phase to phase reboot, with error:", err)
-			}
-			return true
-		} else if nodeIssueReport.Spec.Action == nodeIssueReportv1alpha1.Replace && nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseNone {
-			//TODO aws replace node logic
-			nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseReplace
-			if _, err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.TODO(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
-				n.logger.Errorln("[node none phase]  failed to change the phase to phase replace, with error:", err)
-			}
-			return true
-		}
+		
 
 	}
 

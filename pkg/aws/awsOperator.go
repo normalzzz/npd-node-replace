@@ -100,8 +100,14 @@ func (a *AwsOperator) SNSNotify(nodeissuereport nodeIssueReportv1alpha1.NodeIssu
 	action := nodeissuereport.Spec.Action
 	nodeProblems := nodeissuereport.Spec.NodeProblems
 	nodeProblemsJson, err := json.Marshal(nodeProblems)
+	// nodestatus := nodeissuereport.Spec.NodeStatus
 	if err != nil {
 		log.Errorln(" while try to publish node issue through sns, Marshal nodeProblems object , error happened:", err)
+		return err
+	}
+	fulljson, err := json.Marshal(nodeissuereport)
+	if err != nil {
+		log.Errorln(" while try to publish node issue through sns, Marshal full nodeissuereport object , error happened:", err)
 		return err
 	}
 
@@ -112,7 +118,8 @@ func (a *AwsOperator) SNSNotify(nodeissuereport nodeIssueReportv1alpha1.NodeIssu
 		NodeStatus: %s
 		Issue Happened: %s
 		Action Taken: %s
-		`, nodeissuereport.Spec.NodeName, nodeissuereport.Spec.NodeStatus, string(nodeProblemsJson), action)
+		Full NodeIssueReport Object: %s
+		`, nodeissuereport.Spec.NodeName, nodeissuereport.Spec.NodeStatus, string(nodeProblemsJson), action, fulljson)
 		snspublistInput := sns.PublishInput{
 			TopicArn: &snstopic,
 			Subject:  &snsSubject,
@@ -134,7 +141,8 @@ func (a *AwsOperator) SNSNotify(nodeissuereport nodeIssueReportv1alpha1.NodeIssu
 		NodeStatus: %s
 		Issue Happened: %s
 		Action Taken: %s
-		`, nodeissuereport.Spec.NodeName, nodeissuereport.Spec.NodeStatus, string(nodeProblemsJson), action)
+		Full NodeIssueReport Object: %s
+		`, nodeissuereport.Spec.NodeName, nodeissuereport.Spec.NodeStatus, string(nodeProblemsJson), action, fulljson)
 		snspublistInput := sns.PublishInput{
 			TopicArn: &snstopic,
 			Subject:  &snsSubject,
@@ -155,7 +163,8 @@ func (a *AwsOperator) SNSNotify(nodeissuereport nodeIssueReportv1alpha1.NodeIssu
 		NodeName: %s
 		Issue Happened: %s
 		Action Taken: %s
-		`, nodeissuereport.Spec.NodeName, string(nodeProblemsJson), action)
+		Full NodeIssueReport Object: %s
+		`, nodeissuereport.Spec.NodeName, string(nodeProblemsJson), action, fulljson)
 		snspublistInput := sns.PublishInput{
 			TopicArn: &snstopic,
 			Subject:  &snsSubject,

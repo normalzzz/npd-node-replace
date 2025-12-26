@@ -7,7 +7,7 @@ npd-node-replace 的主要功能如下：
 3. 根据用户配置的 [Tolerance 配置](https://github.com/normalzzz/npd-node-replace/blob/main/pkg/config/tolerance.json) 进行节点的自动替换或重启
 4. 通知集群 Admin 节点上发生的历史问题事件
 5. 监控节点状态，当节点状态为 NotReady 时，进行节点替换，（节点的替换操作依赖于针对节点的两次状态检查，在节点状态由 Ready 变为 Notready 三分钟之后，会再次检查节点的状态，若节点状态仍为 Notready，则会进行节点替换，若节点状态变为 Ready ，则认为节点正常）
-6. 若您仅希望 npd-node-replace 组件对节点问题和状态进行监控，而不进行 reboot 或 replace 操作，可以使用 "npd-node-replace-disabled=true" 标签来对该节点禁用 npd-node-replace 组件的操作。`kubectl label nodes <node name> npd-node-replace-disabled=true` 
+6. 当前 npd-node-replace 组件处于 pre release 阶段，为了集群稳定性，默认情况下不会对节点处理，只有在节点上拥有  "npd-node-replace-enabled=true"  才会对节点进行处理，否则只对节点进行问题监控和收集报告 `kubectl label nodes <node name> npd-node-replace-enabled=true` (v0.1.1 版本为黑名单机制，标签为 npd-node-replace-disabled=true， 在 v0.1.2 版本推出修改)
 7. 代码结构详解：https://deepwiki.com/normalzzz/npd-node-replace
 
 ## **重要**（使用之前请重点阅读）
