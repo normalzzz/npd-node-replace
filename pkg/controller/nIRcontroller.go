@@ -518,7 +518,7 @@ func (n *NIRController) processNextItem() bool {
 				n.queue.AddRateLimited(key)
 				return true
 			} else {
-				n.logger.Infoln("[node problem detected, skip node] node has labeled npd-node-replace-enabled=true, deleted nodeIssueReport:", nodeIssueReport.Name)
+				n.logger.Infoln("[node problem detected, skip node] node is not labeled npd-node-replace-enabled=true, deleted nodeIssueReport:", nodeIssueReport.Name)
 			}
 			return true
 			
