@@ -1,6 +1,7 @@
 # 简介
 npd-node-replace 组件用于缓解当前 Amazon EKS 在中国区EKS 集群中的问题节点无法被及时处理的痛点
 推荐使用当前最新版本为 v0.1.2 （）
+
 npd-node-replace 的主要功能如下：
 1. 侦听来自 npd 的关于节点问题的报告事件
 2. 将节点的问题事件记录在 NodeIssueReport 中
@@ -165,7 +166,7 @@ kubectl apply -f deploy/tolerance-configmap.yaml
 kubectl apply -f deploy/npd-node-replace-deployment.yaml
 ```
 ### Helm 部署
-Helm package link : https://github.com/normalzzz/npd-node-replace/blob/main/deploy/npd-node-replace/npd-node-replace-0.1.1.tgz
+Helm package link : https://github.com/normalzzz/npd-node-replace/blob/main/deploy/npd-node-replace/npd-node-replace-0.1.2.tgz
 1. values.yaml 参数配置文件修改：
 ```yaml
 kubernetesClusterDomain: cluster.local
