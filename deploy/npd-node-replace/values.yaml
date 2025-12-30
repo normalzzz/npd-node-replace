@@ -6,7 +6,7 @@ npdNodeReplace:
       nodeDoubleCheckGraceTime: 5
     image:
       repository: zxxxxzz/npd-node-replace
-      tag: v1
+      tag: v1.2
     imagePullPolicy: Always
   replicas: 1
 sa:
