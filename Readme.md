@@ -1,6 +1,6 @@
 # 简介
 npd-node-replace 组件用于缓解当前 Amazon EKS 在中国区EKS 集群中的问题节点无法被及时处理的痛点
-
+推荐使用当前最新版本为 v0.1.2 （）
 npd-node-replace 的主要功能如下：
 1. 侦听来自 npd 的关于节点问题的报告事件
 2. 将节点的问题事件记录在 NodeIssueReport 中

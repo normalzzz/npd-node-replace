@@ -119,7 +119,7 @@ func (a *AwsOperator) SNSNotify(nodeissuereport nodeIssueReportv1alpha1.NodeIssu
 		Issue Happened: %s
 		Action Taken: %s
 		Full NodeIssueReport Object: %s
-		`, nodeissuereport.Spec.NodeName, nodeissuereport.Spec.NodeStatus, string(nodeProblemsJson), action, fulljson)
+		`, nodeissuereport.Spec.NodeName, nodeissuereport.Spec.NodeStatus, string(nodeProblemsJson), action, string(fulljson))
 		snspublistInput := sns.PublishInput{
 			TopicArn: &snstopic,
 			Subject:  &snsSubject,
@@ -142,7 +142,7 @@ func (a *AwsOperator) SNSNotify(nodeissuereport nodeIssueReportv1alpha1.NodeIssu
 		Issue Happened: %s
 		Action Taken: %s
 		Full NodeIssueReport Object: %s
-		`, nodeissuereport.Spec.NodeName, nodeissuereport.Spec.NodeStatus, string(nodeProblemsJson), action, fulljson)
+		`, nodeissuereport.Spec.NodeName, nodeissuereport.Spec.NodeStatus, string(nodeProblemsJson), action, string(fulljson))
 		snspublistInput := sns.PublishInput{
 			TopicArn: &snstopic,
 			Subject:  &snsSubject,
@@ -164,7 +164,7 @@ func (a *AwsOperator) SNSNotify(nodeissuereport nodeIssueReportv1alpha1.NodeIssu
 		Issue Happened: %s
 		Action Taken: %s
 		Full NodeIssueReport Object: %s
-		`, nodeissuereport.Spec.NodeName, string(nodeProblemsJson), action, fulljson)
+		`, nodeissuereport.Spec.NodeName, string(nodeProblemsJson), action, string(fulljson))
 		snspublistInput := sns.PublishInput{
 			TopicArn: &snstopic,
 			Subject:  &snsSubject,

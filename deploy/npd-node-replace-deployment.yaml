@@ -18,7 +18,7 @@ spec:
     spec:
       serviceAccount: npd-node-replace-sa
       containers:
-      - image: zxxxx/npd-node-replace:v1
+      - image: zxxxx/npd-node-replace:v1.2
         name: npd-node-replace
         imagePullPolicy: Always
         volumeMounts:
@@ -42,7 +42,7 @@ spec:
         - name: SNS_TOPIC_ARN
           value: <SNS topic arn>
         - name: NODE_DOULBE_CHECK_GRACE_TIME
-          value: "5"   # the grace time for double check before replacing node, in minutes, default is 3 minutes
+          value: "5"   # the grace time for double check before replacing node, in minutes, default is 3 minutes, make sure it is larger than node reboot time 
       volumes:
       - name: config-volume
         configMap:
