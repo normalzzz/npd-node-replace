@@ -1,0 +1,14 @@
+apiVersion: v1
+entries:
+  npd-node-replace:
+  - apiVersion: v2
+    appVersion: 0.1.2
+    created: "2026-01-06T06:08:11.852843034Z"
+    description: A Helm chart for Kubernetes
+    digest: 8c56af113b8e0f4e830a6606a36a34c0a37de4476f5d00d5335b8ec36910096f
+    name: npd-node-replace
+    type: application
+    urls:
+    - https://github.com/normalzzz/npd-node-replace/releases/download/npd-node-replace-0.1.2/npd-node-replace-0.1.2.tgz
+    version: 0.1.2
+generated: "2026-01-06T06:08:11.852848504Z"
