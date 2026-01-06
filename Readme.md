@@ -65,6 +65,19 @@ docker build -t npd-node-replace -f ./Dockerfile_cn .
 # 部署
 **npd-node-place 依赖 node-problem-detector 组件侦听事件，请先部署 [node-problem-detector](https://github.com/kubernetes/node-problem-detector?tab=readme-ov-file#installation)**
 
+npd-node-replace 镜像维护在 Dockerhub，需要首先将镜像拉取并推送到中国区 Amazon ECR，在访问海外资源状况良好的集群运行如下命令：
+```bash
+## 拉取 Docker 镜像：
+docker pull zxxxxzz/npd-node-replace:v1.2
+
+## 为镜像制作标签：
+docker tag zxxxxzz/npd-node-replace:v1.2 <account id>.dkr.ecr.<region id>.amazonaws.com.cn/<repository name>:v1.2
+
+## 推送到 ECR：
+aws ecr get-login-password --region <region id> | docker login --username AWS --password-stdin <account id>.dkr.ecr.<region id>.amazonaws.com.cn
+```
+
+
 ## Tolerance 配置：
 Tolerance 配置中可以配置对于某些问题发生问题的容忍次数，示例配置：
 ```json
@@ -133,10 +146,23 @@ metadata:
     ]
 }
 ```
+使用 eksctl 创建 IAM role 和 serviceaccount
+```bash
+eksctl create iamserviceaccount \
+    --cluster=<cluster name> \
+    --namespace=<fargate namespace> \
+    --name=npd-node-replace-sa \
+    --attach-policy-arn=arn:aws-cn:iam::<account id>:policy/NPDNodeReplacePolicy \
+    --override-existing-serviceaccounts \
+    --region <region> \
+    --approve
+```
+
 
 IRSA 的创建方式您可以参考： https://docs.amazonaws.cn/eks/latest/userguide/iam-roles-for-service-accounts.html
 
-### npd-node-replace-deployment.yaml 配置：
+### 部署模板：
+npd-node-replace-deployment.yaml 配置：
 #### 环境变量配置：
 在 [npd-node-replace-deployment.yaml](https://github.com/normalzzz/npd-node-replace/blob/main/deploy/npd-node-replace-deployment.yaml) 中您需要在 Deployment.spec.template.spec.env 的如下环境变量中添加 SNS Topic ARN:
 ```yaml
@@ -151,8 +177,6 @@ IRSA 的创建方式您可以参考： https://docs.amazonaws.cn/eks/latest/user
       - image: <image_url>
         name: npd-node-replace
 ```
-
-### 部署模板：
 1. 部署 CRD：
 ```bash
 kubectl apply -f config/crd/nodeissuereporter.xingzhan.io_nodeissuereports.yaml
@@ -166,17 +190,26 @@ kubectl apply -f deploy/tolerance-configmap.yaml
 kubectl apply -f deploy/npd-node-replace-deployment.yaml
 ```
 ### Helm 部署
-Helm package link : https://github.com/normalzzz/npd-node-replace/blob/main/deploy/npd-node-replace/npd-node-replace-0.1.2.tgz
-1. values.yaml 参数配置文件修改：
+添加 helm chart repo：
+```
+helm repo add <alia> https://normalzzz.github.io/npd-node-replace/
+```
+
+更新 values.yaml，
+- snsTopicArn 部分为您的 SNS Topic ARN，用于接收 npd-node-replace 发布的message，通知管理员
+- repository 为您用于存储 npd-node-replace 容器镜像的 ECR repository 链接
+- 第一步中用于 IRSA 授权的 IAM role arn，若您希望使用不同的 IAM role，可以更改该值
+- toleranceJson 为您的 Tolerance 配置，该配置仅为示例，您需要根据自己的需求进行更改，关于 Tolerance 配置可以参考[5]
 ```yaml
 kubernetesClusterDomain: cluster.local
 npdNodeReplace:
   npdNodeReplace:
     env:
       snsTopicArn: <sns topic arn>
+      nodeDoubleCheckGraceTime: 15
     image:
-      repository: zxxxxzz/npd-node-replace
-      tag: v1
+      repository: <account id>.dkr.ecr.<region id>.amazonaws.com.cn/<repository name>
+      tag: v1.2
     imagePullPolicy: Always
   replicas: 1
 sa:
@@ -199,20 +232,12 @@ toleranceConfig:
         }
       }
     }
-
 ```
-- <sns topic arn> 修改为 EKS 集群账户中存在的 Amazon SNS Topic ARN
-- npdNodeReplace.npdNodeReplace.image 中的 zxxxxzz/npd-node-replace:v1 镜像存在于 Docker 官方，如果在中国大陆遇到镜像无法拉取的问题，请将镜像转移到 Amazon ECR 并将该字段替换为 Amazon ECR 镜像 URL，详细操作步骤可以参考 [Amazon ECR 官方文档](https://docs.amazonaws.cn/AmazonECR/latest/userguide/docker-push-ecr-image.html)
-- sa.serviceAccount.annotations 中 <IRSA IAM role arn> 请替换为 [IAM 权限配置](https://github.com/normalzzz/npd-node-replace?tab=readme-ov-file#iam-%E6%9D%83%E9%99%90%E9%85%8D%E7%BD%AE) 部分创建的 Amazon IAM Role ARN **通过 Helm chart 创建的 service account 所处的命名空间(namespace) 以及 service account name 会与您 helm install 时传入的 release name 和 namespace 参数相关，请检查 Amazon IAM role 的信任实体中的 service account 信息与您当前集群中的 service account 信息一致**
-- toleranceConfig 部分请根据业务需求修改，参考[Tolerance 配置](https://github.com/normalzzz/npd-node-replace?tab=readme-ov-file#tolerance-%E9%85%8D%E7%BD%AE)部分
+部署 helm chart，其中 --set serviceAccount.create=false 选项代表不再创建 service account 资源，service account 在第一步 IAM 配置中已经创建。
+```bash
+helm install <release name> <alias>/npd-node-replace --namespace <fargate namespace> --set serviceAccount.create=false -f values.yaml 
+```
 
-2. 安装 release：
-`helm install <release_name> <Helm Chart Path> -n <namespace> -f values.yaml`
-或 
-`helm install <my-release> oci://registry-1.docker.io/zxxxxzz/npd-node-replace --version 0.1.0`
-
-3. 卸载 release：
-`helm uninstall <release name> -n <namespace>`
 
 # 测试：
 可以使用如下方式注入实例系统问题：
@@ -235,19 +260,4 @@ echo "<1>divide error: 0000 [#1] SMP" | sudo tee /dev/kmsg
 [root@Test ~]# kubectl top pod npd-node-replace-5c67496ffd-gkg2w -n kube-system
 NAME                                CPU(cores)   MEMORY(bytes)   
 npd-node-replace-5c67496ffd-gkg2w   1m           7Mi     
-```
-
-# TODOS:
-1. 处理节点 NotReady 状态 <-- DONE 需要测试
-2. 通过节点 label 对节点做黑名单，发现问题时仅发送邮件通知管理员，但是不将节点移除集群。<-- DONE 需要测试。
-3. drain 节点时引入重试机制  <-- DONE, 需要测试
-4. 加入对节点 grace time 的支持 <-- DONE 需要测试
-5. 添加 NIR 资源的阈值处理（超过触发告警，发送邮件）
-6. 细分处理节点 unknown 和notready 状态
-```go
-const (
-	ConditionTrue    ConditionStatus = "True"
-	ConditionFalse   ConditionStatus = "False"
-	ConditionUnknown ConditionStatus = "Unknown"
-)
 ```
