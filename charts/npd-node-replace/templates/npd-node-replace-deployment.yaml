@@ -49,6 +49,7 @@ spec:
           readOnly: true
           subPath: tolerance.json
       serviceAccount: npd-node-replace-sa
+      dnsPolicy: Default
       volumes:
       - configMap:
           name: {{ include "npd-node-replace.fullname" . }}-tolerance-config
