@@ -129,7 +129,19 @@ func (c *NodeController) enqueueDelay(obj interface{}) {
 	c.delayqueue.AddAfter(eventkey, c.gracetime)
 }
 
+func (c *NodeController) checkIfKarpenterNode(node *corev1.Node) bool {
+	for _, nodeowner := range node.OwnerReferences{
+		if nodeowner.Kind == "NodeClaim" {
+			c.logger.Infoln("Node", node.Name, "is managed by Karpenter, skip it")
+			return false
+		}
+	}
+	return true
+}
+
 func (c *NodeController) nodeUpdateHandler(oldObj, newObj interface{}) {
+	
+
 	newNode, ok := newObj.(*corev1.Node)
 	if !ok {
 		c.logger.Infoln("Error casting newObj to Node")
@@ -138,6 +150,10 @@ func (c *NodeController) nodeUpdateHandler(oldObj, newObj interface{}) {
 	oldNode, ok := oldObj.(*corev1.Node)
 	if !ok {
 		c.logger.Infoln("Error casting oldObj to Node")
+		return
+	}
+
+	if !c.checkIfKarpenterNode(newObj.(*corev1.Node)){
 		return
 	}
 
