@@ -3,6 +3,8 @@ package config
 import (
 	"encoding/json"
 	"os"
+	"io"
+	"errors"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -31,21 +33,40 @@ type ToleranceCollection struct {
 }
 
 // we should load configuration file first, otherwise exit directly
-func LoadConfiguration() (ToleranceCollection, error) {
+func LoadConfiguration() (*ToleranceCollection, error) {
 	filed, err := os.Open("tolerance.json")
 
 	if err != nil {
-		log.Error("can not open configuration file tolerance.json", err)
+		if os.IsNotExist(err) {
+			log.Warn("tolerance.json not found, skip loading config")
+			return nil, nil
+		}
+		return nil, err
 	}
 
 	defer filed.Close()
 
-	var toleranceColl ToleranceCollection
 
-	if err := json.NewDecoder(filed).Decode(&toleranceColl); err != nil {
-		log.Error("faild to decode tolerance config file, please check config file", err)
+	stat, err := filed.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if stat.Size() == 0 {
+		log.Warn("tolerance.json is empty")
+		return nil, errors.New("tolerance.json is empty")
 	}
 
-	return toleranceColl, err
+	var toleranceColl ToleranceCollection
+	decoder := json.NewDecoder(filed)
 
+	if err := decoder.Decode(&toleranceColl); err != nil {
+		if err == io.EOF {
+			log.Warn("tolerance.json is empty or whitespace")
+			return nil, err
+		}
+		log.Error("invalid tolerance.json format, ignore config", err)
+		return nil, err
+	}
+
+	return &toleranceColl, nil
 }

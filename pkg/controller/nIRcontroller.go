@@ -3,13 +3,13 @@ package controller
 import (
 	"context"
 	"encoding/json"
-	// "errors"
+	plainerr "errors"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"os"
 	"strings"
 	"time"
 	awspkg "xingzhan-node-autoreplace/pkg/aws"
 	"xingzhan-node-autoreplace/pkg/config"
-	"k8s.io/apimachinery/pkg/api/errors"
 	nirclient "xingzhan-node-autoreplace/pkg/generated/clientset/versioned"
 	nodeIssueReport "xingzhan-node-autoreplace/pkg/generated/informers/externalversions/nodeIssueReport/v1alpha1"
 
@@ -45,7 +45,7 @@ type NIRController struct {
 	queue workqueue.TypedRateLimitingInterface[string]
 	// Add fields here for your controller's state, e.g. clientsets, informers, listers, etc.
 
-	toleranceConfig config.ToleranceCollection
+	toleranceConfig *config.ToleranceCollection
 
 	nodeIssueReportLister nodeIssueReportLister.NodeIssueReportLister
 	nodeIssueReportClient nirclient.Clientset
@@ -117,10 +117,10 @@ func (n *NIRController) nodeUpdateHandler(oldObj interface{}, newObj interface{}
 		n.logger.Infoln("New node joined and ready:", newNodeObj.Name)
 		if n.ifNeedAddToChan(newNodeObj) {
 			select {
-				case newNodeChan <- newNodeObj.Name:
-					n.logger.Infoln("Sent node  to newNodeChan", newNodeObj.Name)
-				default:
-					n.logger.Warningf("newNodeChan blocked, failed to send %s", newNodeObj.Name)
+			case newNodeChan <- newNodeObj.Name:
+				n.logger.Infoln("Sent node  to newNodeChan", newNodeObj.Name)
+			default:
+				n.logger.Warningf("newNodeChan blocked, failed to send %s", newNodeObj.Name)
 			}
 		}
 
@@ -142,8 +142,8 @@ func (n *NIRController) ifNeedAddToChan(newNodeObj *v1.Node) bool {
 		if nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseDetached {
 			oldNodeObj, err := n.nodelister.Get(nodeIssueReport.Spec.NodeName)
 			if err != nil {
-				n.logger.Errorln("failed to get old node object when check if need add to chan:", err)	
-				continue			
+				n.logger.Errorln("failed to get old node object when check if need add to chan:", err)
+				continue
 			}
 			if !n.checkIfNewnodeExpected(oldNodeObj, newNodeObj) {
 				n.logger.Infoln("the new node is not expected node for replacement, skip it:", newNodeObj.Name)
@@ -159,9 +159,9 @@ func (n *NIRController) ifNeedAddToChan(newNodeObj *v1.Node) bool {
 func (n *NIRController) taintNoexecuteOnNode(nodeobj *v1.Node) error {
 	nodeobj.Spec.Taints = append(nodeobj.Spec.Taints, v1.Taint{
 		Effect: v1.TaintEffectNoExecute,
-		Key:   "npd-node-replace/taint",
-		Value: "unreachable",
-	},)
+		Key:    "npd-node-replace/taint",
+		Value:  "unreachable",
+	})
 	_, err := n.kubeclient.CoreV1().Nodes().Update(context.TODO(), nodeobj, metav1.UpdateOptions{})
 	if err != nil {
 		n.logger.Errorln("failed to taint NoExecute on node:", nodeobj.Name, "with error:", err)
@@ -169,10 +169,8 @@ func (n *NIRController) taintNoexecuteOnNode(nodeobj *v1.Node) error {
 	}
 	n.logger.Infoln("successfully tainted NoExecute on node:", nodeobj.Name)
 	return nil
-	
+
 }
-
-
 
 func (n *NIRController) drainNode(nodeobj v1.Node, forcely bool) error {
 	drainer := &drain.Helper{
@@ -187,7 +185,7 @@ func (n *NIRController) drainNode(nodeobj v1.Node, forcely bool) error {
 		DeleteEmptyDirData:  true,
 	}
 
-	if forcely{
+	if forcely {
 		if err := drain.RunCordonOrUncordon(drainer, &nodeobj, true); err != nil {
 			n.logger.Errorln("failed to cordon node during drain operation", err)
 			return err
@@ -200,9 +198,8 @@ func (n *NIRController) drainNode(nodeobj v1.Node, forcely bool) error {
 		_ = drain.RunNodeDrain(drainer, nodeobj.Name)
 		return nil
 
-
 	}
-	
+
 	if err := drain.RunCordonOrUncordon(drainer, &nodeobj, true); err != nil {
 		n.logger.Errorln("failed to cordon node during drain operation", err)
 		return err
@@ -318,7 +315,6 @@ func (n *NIRController) processNextItem() bool {
 
 		// for notready node, do normal drain
 
-
 		// for unknown status node, do forcely drain
 		if nodeIssueReport.Spec.NodeStatus == nodeIssueReportv1alpha1.NodeUnknownStatus {
 			err = n.drainNode(*nodeobj, true)
@@ -327,7 +323,7 @@ func (n *NIRController) processNextItem() bool {
 				n.queue.AddRateLimited(key)
 				return true
 			}
-		}else {
+		} else {
 			err = n.drainNode(*nodeobj, false)
 			if err != nil {
 				n.logger.Errorln("[node newnodejoined phase] fail to drain node:", err)
@@ -521,8 +517,8 @@ func (n *NIRController) processNextItem() bool {
 				n.logger.Infoln("[node problem detected, skip node] node is not labeled npd-node-replace-enabled=true, deleted nodeIssueReport:", nodeIssueReport.Name)
 			}
 			return true
-			
-		}else {
+
+		} else {
 			n.logger.Infoln("node has label npd-node-replace-enabled=true, user allow auto replace/reboot this node, continue process:", nodename)
 			n.logger.Infoln("problem on node is not tolerated by user, do something")
 			if nodeIssueReport.Spec.Action == nodeIssueReportv1alpha1.Reboot && nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseNone {
@@ -542,16 +538,24 @@ func (n *NIRController) processNextItem() bool {
 			}
 		}
 
-		
-
 	}
 
 	// travesal all node problems
 	// thinking replace will handle more unbearable issues, if NIR is tagged with replace ation , instanstly perform , is tagged with reboot action, continue to travesal problems on the node
 	for problemname, problem := range problems {
+		// if n.toleranceConfig == nil {
+		// 	n.logger.Errorln("tolerance config is nil, cannot check if problem is tolerated, just return")
+		// }
 		// get the tolerance config for specific senario
 		n.logger.Infoln("travesal all node problems, current problem", problemname)
-		tolerancecount, exist := n.toleranceConfig.ToleranceCollection[problemname]
+
+		// add logic to handle error when toleranceConfig is nil
+		tolerancecount, exist, err := n.getTolerancecount(problemname)
+		if err != nil {
+			n.logger.Errorln("failed to get tolerance count for problem:", problemname, "with error:", err)
+			return true
+		}
+		// tolerancecount, exist := n.toleranceConfig.ToleranceCollection[problemname]
 		if !exist {
 			n.logger.Infoln("no tolerance config for problem:", problemname, "skip it")
 			continue
@@ -559,8 +563,8 @@ func (n *NIRController) processNextItem() bool {
 
 		timewindows := time.Duration(tolerancecount.TimeWindowInMinutes) * time.Minute
 		count := 0
-		for _, messagerecord := range problem.Message{
-			if time.Since(messagerecord.Timestamp.Time) <= timewindows{
+		for _, messagerecord := range problem.Message {
+			if time.Since(messagerecord.Timestamp.Time) <= timewindows {
 				count++
 			}
 		}
@@ -603,6 +607,15 @@ func (n *NIRController) processNextItem() bool {
 	}
 
 	return true
+}
+
+func (n *NIRController) getTolerancecount(problemname string) (config.Tolerance, bool, error){
+	if n.toleranceConfig == nil {
+		n.logger.Errorln("tolerance config is nil, cannot get tolerance count for problem:", problemname)
+		return config.Tolerance{}, false, plainerr.New("tolerance config is nil")
+	}
+	tolerancecount, exist := n.toleranceConfig.ToleranceCollection[problemname]
+	return tolerancecount, exist, nil
 }
 
 func (n *NIRController) checkIfNewnodeExpected(nodeobj *v1.Node, newnodeobj *v1.Node) bool {
