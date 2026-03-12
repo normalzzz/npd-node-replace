@@ -1,4 +1,6 @@
-FROM public.ecr.aws/docker/library/golang:alpine as builder
+FROM public.ecr.aws/docker/library/golang:alpine AS builder
+
+ARG TARGETARCH
 
 RUN go env -w CGO_ENABLED=0
 
@@ -10,7 +12,7 @@ RUN go mod download
 
 COPY . .
 
-RUN go build -trimpath -ldflags "-s -w -extldflags '-static -fpic'"  -o npd-node-replace main.go
+RUN GOARCH=${TARGETARCH} go build -trimpath -ldflags "-s -w -extldflags '-static -fpic'" -o npd-node-replace main.go
 
 FROM public.ecr.aws/docker/library/alpine
 
