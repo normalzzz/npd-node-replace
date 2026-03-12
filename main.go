@@ -2,25 +2,22 @@ package main
 
 import (
 	"context"
-	"os"
-
-	// "time"
-
 	nested "github.com/antonfisher/nested-logrus-formatter"
 	log "github.com/sirupsen/logrus"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
+	// "k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
-
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
-
+	"time"
 	awspkg "xingzhan-node-autoreplace/pkg/aws"
 	"xingzhan-node-autoreplace/pkg/controller"
 	nirclient "xingzhan-node-autoreplace/pkg/generated/clientset/versioned"
 	nodeissuereportinformer "xingzhan-node-autoreplace/pkg/generated/informers/externalversions"
-	le "xingzhan-node-autoreplace/pkg/leaderelection"
 	"xingzhan-node-autoreplace/pkg/signal"
+
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"os"
 )
 
 func init() {
@@ -30,6 +27,7 @@ func init() {
 }
 
 func main() {
+
 	regionid := os.Getenv("AWS_REGION")
 	cfg, err := awsconfig.LoadDefaultConfig(context.TODO(), awsconfig.WithRegion(regionid))
 	if err != nil {
@@ -38,77 +36,59 @@ func main() {
 	awsOperator := awspkg.NewAwsOperator(cfg)
 
 	config, err := clientcmd.BuildConfigFromFlags("", clientcmd.RecommendedHomeFile)
+
 	if err != nil {
 		restConfig, err := rest.InClusterConfig()
 		if err != nil {
 			log.Fatal(err)
+
 		}
 		config = restConfig
-	}
 
+	}
 	clientset, err := kubernetes.NewForConfig(config)
+
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	nirClient, err := nirclient.NewForConfig(config)
+	nirclient, err := nirclient.NewForConfig(config)
 	if err != nil {
-		log.Fatal(err)
+		log.Error(err)
 	}
 
-	// Determine the namespace for the Lease object.
-	// Use the pod's own namespace so the Lease lives alongside the workload.
-	leaseNamespace := os.Getenv("SELF_POD_NAMESPACE")
-	if leaseNamespace == "" {
-		leaseNamespace = "default"
-	}
+	// initialize stopcha
+	stopcha := signal.SetupSignalHandler()
 
-	stopCh := signal.SetupSignalHandler()
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		<-stopCh
-		cancel()
-	}()
+	kubefactory := informers.NewSharedInformerFactory(clientset, time.Minute*0)
 
-	// Leader election: only the leader runs the controllers.
-	le.Run(ctx, clientset, leaseNamespace,
-		onStartedLeading(clientset, nirClient, awsOperator),
-		onStoppedLeading(cancel),
-	)
-}
+	nodeIssueReportFactory := nodeissuereportinformer.NewSharedInformerFactory(nirclient, time.Minute*0)
 
-func onStartedLeading(clientset *kubernetes.Clientset, nirClient *nirclient.Clientset, awsOperator *awspkg.AwsOperator) func(ctx context.Context) {
-	return func(ctx context.Context) {
-		log.Infoln("became leader, starting controllers")
+	eventInformer := kubefactory.Core().V1().Events()
 
-		kubefactory := informers.NewSharedInformerFactory(clientset, 0)
-		nodeIssueReportFactory := nodeissuereportinformer.NewSharedInformerFactory(nirClient, 0)
+	nodeInformer := kubefactory.Core().V1().Nodes()
 
-		eventInformer := kubefactory.Core().V1().Events()
-		nodeInformer := kubefactory.Core().V1().Nodes()
-		nodeIssueReportInformer := nodeIssueReportFactory.Nodeissuereporter().V1alpha1().NodeIssueReports()
+	nodeIssueReportInformer := nodeIssueReportFactory.Nodeissuereporter().V1alpha1().NodeIssueReports()
 
-		eventcontroller := controller.NewEventController(eventInformer, nodeIssueReportInformer, *clientset, *nirClient, nodeInformer)
-		nircontroller := controller.NewNIRController(nodeIssueReportInformer, *nirClient, *clientset, *awsOperator, nodeInformer)
-		nodecontroller := controller.NewNodeController(nodeInformer, *nirClient, nodeIssueReportInformer)
+	// nircontroller := controller.NewNIRController(nodeIssueReportInformer)
+	eventcontroller := controller.NewEventController(eventInformer, nodeIssueReportInformer, *clientset, *nirclient, nodeInformer)
 
-		leaderStopCh := ctx.Done()
+	nircontroller := controller.NewNIRController(nodeIssueReportInformer, *nirclient, *clientset, *awsOperator, nodeInformer)
+	// stopcha := make(chan struct{})
+	nodecontroller := controller.NewNodeController(nodeInformer, *nirclient, nodeIssueReportInformer)
 
-		kubefactory.Start(leaderStopCh)
-		nodeIssueReportFactory.Start(leaderStopCh)
+	kubefactory.Start(stopcha)
+	nodeIssueReportFactory.Start(stopcha)
 
-		go nircontroller.Run(leaderStopCh)
-		go eventcontroller.Run(leaderStopCh)
-		go nodecontroller.Run(leaderStopCh)
+	go nircontroller.Run(stopcha)
+	go eventcontroller.Run(stopcha)
+	go nodecontroller.Run(stopcha)
 
-		<-leaderStopCh
-		log.Infoln("leader context cancelled, controllers stopped")
-	}
-}
 
-func onStoppedLeading(cancel context.CancelFunc) func() {
-	return func() {
-		log.Infoln("lost leadership, shutting down")
-		cancel()
-	}
+	<-stopcha
+
+	log.Infoln("Main program received stop signal, shutting down")
+	//awsOperator := awspkg.NewAwsOperator(cfg)
+
+
 }
