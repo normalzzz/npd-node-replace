@@ -68,10 +68,10 @@ docker build -t npd-node-replace -f ./Dockerfile_cn .
 npd-node-replace 镜像维护在 Dockerhub，需要首先将镜像拉取并推送到中国区 Amazon ECR，在访问海外资源状况良好的集群运行如下命令：
 ```bash
 ## 拉取 Docker 镜像：
-docker pull zxxxxzz/npd-node-replace:v1.2
+docker pull zxxxxzz/npd-node-replace:latest
 
 ## 为镜像制作标签：
-docker tag zxxxxzz/npd-node-replace:v1.2 <account id>.dkr.ecr.<region id>.amazonaws.com.cn/<repository name>:v1.2
+docker tag zxxxxzz/npd-node-replace:latest <account id>.dkr.ecr.<region id>.amazonaws.com.cn/<repository name>:latest
 
 ## 推送到 ECR：
 aws ecr get-login-password --region <region id> | docker login --username AWS --password-stdin <account id>.dkr.ecr.<region id>.amazonaws.com.cn
@@ -209,7 +209,7 @@ npdNodeReplace:
       nodeDoubleCheckGraceTime: 15
     image:
       repository: <account id>.dkr.ecr.<region id>.amazonaws.com.cn/<repository name>
-      tag: v1.2
+      tag: latest
     imagePullPolicy: Always
   replicas: 1
 sa:
