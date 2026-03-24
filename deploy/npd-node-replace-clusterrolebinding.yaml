@@ -10,4 +10,4 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: npd-node-replace-sa
-  namespace: kube-system
+  namespace: fargatenamespace1

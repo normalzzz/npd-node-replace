@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	plainerr "errors"
-	"k8s.io/apimachinery/pkg/api/errors"
 	"os"
 	"strings"
 	"time"
@@ -12,6 +11,8 @@ import (
 	"xingzhan-node-autoreplace/pkg/config"
 	nirclient "xingzhan-node-autoreplace/pkg/generated/clientset/versioned"
 	nodeIssueReport "xingzhan-node-autoreplace/pkg/generated/informers/externalversions/nodeIssueReport/v1alpha1"
+
+	"k8s.io/apimachinery/pkg/api/errors"
 
 	"k8s.io/apimachinery/pkg/labels"
 
@@ -609,7 +610,7 @@ func (n *NIRController) processNextItem() bool {
 	return true
 }
 
-func (n *NIRController) getTolerancecount(problemname string) (config.Tolerance, bool, error){
+func (n *NIRController) getTolerancecount(problemname string) (config.Tolerance, bool, error) {
 	if n.toleranceConfig == nil {
 		n.logger.Errorln("tolerance config is nil, cannot get tolerance count for problem:", problemname)
 		return config.Tolerance{}, false, plainerr.New("tolerance config is nil")
@@ -666,7 +667,7 @@ func (n *NIRController) Run(stopch <-chan struct{}) {
 func NewNIRController(nodeIssueReportInformer nodeIssueReport.NodeIssueReportInformer, nodeIssueReportClient nirclient.Clientset, kubeclient kubernetes.Clientset, awsOperator awspkg.AwsOperator, nodeInformer informercorev1.NodeInformer) *NIRController {
 	tolerancecoll, err := config.LoadConfiguration()
 	if err != nil {
-		log.Fatal("[NIR controller]failed to load tolerance configuration", err)
+		log.Errorf("[NIR controller] failed to load tolerance configuration: %v, will continue with nil tolerance config", err)
 	}
 	n := &NIRController{
 		nodeIssueReportInformer: nodeIssueReportInformer,
