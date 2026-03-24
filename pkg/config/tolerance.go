@@ -2,9 +2,8 @@ package config
 
 import (
 	"encoding/json"
-	"os"
 	"io"
-	"errors"
+	"os"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -46,14 +45,13 @@ func LoadConfiguration() (*ToleranceCollection, error) {
 
 	defer filed.Close()
 
-
 	stat, err := filed.Stat()
 	if err != nil {
 		return nil, err
 	}
 	if stat.Size() == 0 {
-		log.Warn("tolerance.json is empty")
-		return nil, errors.New("tolerance.json is empty")
+		log.Warn("tolerance.json is empty, skip loading config")
+		return nil, nil
 	}
 
 	var toleranceColl ToleranceCollection

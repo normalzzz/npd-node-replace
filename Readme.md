@@ -68,13 +68,14 @@ docker build -t npd-node-replace -f ./Dockerfile_cn .
 npd-node-replace 镜像维护在 Dockerhub，需要首先将镜像拉取并推送到中国区 Amazon ECR，在访问海外资源状况良好的集群运行如下命令：
 ```bash
 ## 拉取 Docker 镜像：
-docker pull zxxxxzz/npd-node-replace:v1.2
+docker pull zxxxxzz/npd-node-replace:latest
 
 ## 为镜像制作标签：
-docker tag zxxxxzz/npd-node-replace:v1.2 <account id>.dkr.ecr.<region id>.amazonaws.com.cn/<repository name>:v1.2
+docker tag zxxxxzz/npd-node-replace:latest <account id>.dkr.ecr.<region id>.amazonaws.com.cn/<repository name>:latest
 
 ## 推送到 ECR：
 aws ecr get-login-password --region <region id> | docker login --username AWS --password-stdin <account id>.dkr.ecr.<region id>.amazonaws.com.cn
+docker push <account id>.dkr.ecr.<region id>.amazonaws.com.cn/<repository name>:latest
 ```
 
 
@@ -209,11 +210,12 @@ npdNodeReplace:
       nodeDoubleCheckGraceTime: 15
     image:
       repository: <account id>.dkr.ecr.<region id>.amazonaws.com.cn/<repository name>
-      tag: v1.2
+      tag: latest
     imagePullPolicy: Always
   replicas: 1
 sa:
   serviceAccount:
+    create: false
     annotations:
       eks.amazonaws.com/role-arn: <IRSA IAM role arn>
 toleranceConfig:
@@ -235,7 +237,7 @@ toleranceConfig:
 ```
 部署 helm chart，其中 --set serviceAccount.create=false 选项代表不再创建 service account 资源，service account 在第一步 IAM 配置中已经创建。
 ```bash
-helm install <release name> <alias>/npd-node-replace --namespace <fargate namespace> --set serviceAccount.create=false -f values.yaml 
+helm install <release name> <alias>/npd-node-replace --namespace <fargate namespace> -f values.yaml 
 ```
 
 
@@ -253,11 +255,3 @@ echo "<1>divide error: 0000 [#1] SMP" | sudo tee /dev/kmsg
 ```
 
 根据仓库中的[示例配置](https://github.com/normalzzz/npd-node-replace/blob/main/deploy/tolerance-configmap.yaml)，在使用上述方式触发两次 OOMKilling 事件之后，会发生节点重启。 触发三次 KernelOops 事件之后，会发生节点替换。且在节点重启和替换之后，在 [npd-node-replace-deployment.yaml](https://github.com/normalzzz/npd-node-replace/blob/main/deploy/npd-node-replace-deployment.yaml) 中配置的 SNS topic 会受到邮件提醒，通知节点发生过的历史问题。
-
-
-# npd-node-replace 资源消耗评估：
-```bash
-[root@Test ~]# kubectl top pod npd-node-replace-5c67496ffd-gkg2w -n kube-system
-NAME                                CPU(cores)   MEMORY(bytes)   
-npd-node-replace-5c67496ffd-gkg2w   1m           7Mi     
-```

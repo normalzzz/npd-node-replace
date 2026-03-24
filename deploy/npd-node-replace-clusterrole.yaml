@@ -4,8 +4,10 @@ metadata:
   creationTimestamp: null
   name: npd-node-replace-clusterrole
 rules:
-- apiGroups: [""]
-  resources: ["pods/eviction"]
+- apiGroups:
+  - ""
+  resources:
+  - pods/eviction
   verbs:
   - get
   - list
@@ -34,7 +36,7 @@ rules:
   - update
   - patch
 - apiGroups:
-  - "nodeissuereporter.xingzhan.io"
+  - nodeissuereporter.xingzhan.io
   resources:
   - nodeissuereports
   verbs:
@@ -44,9 +46,31 @@ rules:
   - create
   - delete
   - update
-- apiGroups: ["policy"]
-  resources: ["pods/eviction"]
-  verbs: ["create"]
-- apiGroups: ["apps"]
-  resources: ["daemonsets"]
-  verbs: ["get", "list", "watch"]
+- apiGroups: 
+  - policy
+  resources: 
+  - pods/eviction
+  verbs: 
+  - create
+- apiGroups: 
+  - apps
+  resources: 
+  - daemonsets
+  - replicasets
+  - statefulsets
+  - deployments
+  verbs: 
+  - get
+  - list
+  - watch
+- apiGroups: 
+  - coordination.k8s.io
+  resources: 
+  - leases
+  verbs: 
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - delete

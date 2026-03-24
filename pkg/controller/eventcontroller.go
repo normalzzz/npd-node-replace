@@ -72,9 +72,9 @@ func (c *EventController) constructNodeIssueReport(event *corev1.Event) nodeIssu
 
 	nodeprolems := make(map[string]nodeIssueReportv1alpha1.ProblemRecord)
 	messageentry := nodeIssueReportv1alpha1.MessageEntry{
-			Timestamp: event.LastTimestamp,
-			Message:   event.Message,
-		}
+		Timestamp: event.LastTimestamp,
+		Message:   event.Message,
+	}
 	nodeprolems[event.Reason] = nodeIssueReportv1alpha1.ProblemRecord{
 		Message: []nodeIssueReportv1alpha1.MessageEntry{messageentry},
 	}
@@ -331,6 +331,10 @@ func (c *EventController) isNodeProblemDetectorEvent(e *corev1.Event) bool {
 			c.logger.Infoln("recieved node problem event, but node", nodename, "is handled by karpenter, thus ignore this event")
 			return false
 		}
+	}
+	if val, exists := nodeobj.GetLabels()["eks.amazonaws.com/compute-type"]; exists && val == "fargate" {
+		c.logger.Infoln("recieved node problem event, but node", nodename, "is a fargate node, thus ignore this event")
+		return false
 	}
 
 	component := e.Source.Component

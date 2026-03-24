@@ -45,14 +45,14 @@ type NodeController struct {
 }
 
 func (c *NodeController) requeueDelayAfter(key string, err error) {
-    delay := c.gracetime / 2 
+	delay := c.gracetime / 2
 
-    if errors.IsConflict(err) {
-        delay = 5 * time.Second 
-    }
+	if errors.IsConflict(err) {
+		delay = 5 * time.Second
+	}
 
-    c.logger.Warnf("Requeuing key %s after %v due to error: %v", key, delay, err)
-    c.delayqueue.AddAfter(key, delay)
+	c.logger.Warnf("Requeuing key %s after %v due to error: %v", key, delay, err)
+	c.delayqueue.AddAfter(key, delay)
 }
 
 func (c *NodeController) constructNodeIssueReportForNode(nodename string) *nodeIssueReportv1alpha1.NodeIssueReport {
@@ -74,7 +74,7 @@ func (c *NodeController) constructNodeIssueReportForNode(nodename string) *nodeI
 }
 
 func (c *NodeController) updateNodeIssueReport(nir *nodeIssueReportv1alpha1.NodeIssueReport, nodeobj *corev1.Node) error {
-	nodestatus, _:= c.checknodestatus(nodeobj)
+	nodestatus, _ := c.checknodestatus(nodeobj)
 
 	switch nodestatus {
 	case corev1.ConditionUnknown:
@@ -129,18 +129,24 @@ func (c *NodeController) enqueueDelay(obj interface{}) {
 	c.delayqueue.AddAfter(eventkey, c.gracetime)
 }
 
-func (c *NodeController) checkIfKarpenterNode(node *corev1.Node) bool {
-	for _, nodeowner := range node.OwnerReferences{
+func (c *NodeController) isManagedByASG(node *corev1.Node) bool {
+	// filter out Karpenter nodes (owned by NodeClaim)
+	for _, nodeowner := range node.OwnerReferences {
 		if nodeowner.Kind == "NodeClaim" {
 			c.logger.Infoln("Node", node.Name, "is managed by Karpenter, skip it")
 			return false
 		}
 	}
+	// filter out Fargate nodes
+	labels := node.GetLabels()
+	if val, exists := labels["eks.amazonaws.com/compute-type"]; exists && val == "fargate" {
+		c.logger.Infoln("Node", node.Name, "is a Fargate node, skip it")
+		return false
+	}
 	return true
 }
 
 func (c *NodeController) nodeUpdateHandler(oldObj, newObj interface{}) {
-	
 
 	newNode, ok := newObj.(*corev1.Node)
 	if !ok {
@@ -153,7 +159,7 @@ func (c *NodeController) nodeUpdateHandler(oldObj, newObj interface{}) {
 		return
 	}
 
-	if !c.checkIfKarpenterNode(newObj.(*corev1.Node)){
+	if !c.isManagedByASG(newObj.(*corev1.Node)) {
 		return
 	}
 
@@ -204,6 +210,11 @@ func (c *NodeController) processNextItemDelayqueue() bool {
 		c.requeueDelayAfter(key, err)
 		return true
 	}
+
+	if !c.isManagedByASG(nodeobj) {
+		return true
+	}
+
 	if status, _ := c.checknodestatus(nodeobj); status != corev1.ConditionTrue {
 		c.logger.Warnln("Node", nodeobj.Name, "failed the second time status check, update the node issue report resource to perform node replace action", time.Now())
 		nodeissuereport, err := c.nodeIssueReportLister.NodeIssueReports("default").Get(nodeobj.Name)
@@ -217,9 +228,9 @@ func (c *NodeController) processNextItemDelayqueue() bool {
 			return true
 		}
 		// notice here
-		if status, _ := c.checknodestatus(nodeobj); status == corev1.ConditionUnknown{
+		if status, _ := c.checknodestatus(nodeobj); status == corev1.ConditionUnknown {
 			c.logger.Infoln("Node", nodeobj.Name, "status is unknown, set force replace action directly")
-			nodeissuereport.Spec.NodeStatus = nodeIssueReportv1alpha1.NodeUnknownStatus 
+			nodeissuereport.Spec.NodeStatus = nodeIssueReportv1alpha1.NodeUnknownStatus
 		}
 
 		nodeissuereport.Spec.Action = nodeIssueReportv1alpha1.Replace
@@ -248,7 +259,7 @@ func (c *NodeController) processNextItemDelayqueue() bool {
 				c.requeueDelayAfter(key, err)
 				return true
 			}
-		}else {
+		} else {
 			if err = c.nirclient.NodeissuereporterV1alpha1().NodeIssueReports("default").Delete(context.TODO(), nodeissuereport.Name, metav1.DeleteOptions{}); err != nil {
 				c.logger.Errorln("failed to delete node issue report after node recovered to ready status, need to delete node issue report manually", err)
 				c.requeueDelayAfter(key, err)
@@ -256,7 +267,6 @@ func (c *NodeController) processNextItemDelayqueue() bool {
 			}
 			c.logger.Infoln("deleted node issue report resource for node", nodeobj.Name, "as node recovered to ready status and no issue recorded")
 		}
-		
 
 	}
 	return true
@@ -305,6 +315,11 @@ func (c *NodeController) processNextItem() bool {
 		c.requeue(key)
 		return true
 	}
+
+	if !c.isManagedByASG(nodeobj) {
+		return true
+	}
+
 	nodename := nodeobj.Name
 	nodeissuereport, err := c.nodeIssueReportLister.NodeIssueReports("default").Get(nodename)
 	c.logger.Infoln("for now, update the node issue report resource for node", nodename)
@@ -361,7 +376,7 @@ func NewNodeController(nodeInformer Informercorev1.NodeInformer, nirclient nircl
 		if t, err := time.ParseDuration(node_doublecheck_gracetime + "m"); err != nil {
 			doublecheck_gracetime = 3 * time.Minute
 			log.Warnln("[component:node controller]failed to parse NODE_DOULBE_CHECK_GRACE_TIME env var, use default 3 minutes", err)
-		}else {
+		} else {
 			doublecheck_gracetime = t
 			log.Infoln("[component:node controller]set double check grace time to", doublecheck_gracetime)
 		}
@@ -376,7 +391,7 @@ func NewNodeController(nodeInformer Informercorev1.NodeInformer, nirclient nircl
 		queue:                   workqueue.NewTypedRateLimitingQueue(workqueue.NewTypedItemExponentialFailureRateLimiter[string](1*time.Second, 30*time.Second)),
 		delayqueue:              workqueue.NewTypedDelayingQueue[string](),
 		logger:                  *log.WithField("component", "node controller"),
-		gracetime:				 doublecheck_gracetime,
+		gracetime:               doublecheck_gracetime,
 	}
 
 	// c.logger.

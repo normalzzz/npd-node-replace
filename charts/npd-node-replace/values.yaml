@@ -3,14 +3,15 @@ npdNodeReplace:
   npdNodeReplace:
     env:
       snsTopicArn: <SNS topic arn>
-      nodeDoubleCheckGraceTime: 5
+      nodeDoubleCheckGraceTime: 15
     image:
       repository: zxxxxzz/npd-node-replace
-      tag: v1.2
+      tag: latest
     imagePullPolicy: Always
   replicas: 1
 sa:
   serviceAccount:
+    create: false
     annotations:
       eks.amazonaws.com/role-arn: <IAM role arn for npd-node-replace>.
 toleranceConfig:
