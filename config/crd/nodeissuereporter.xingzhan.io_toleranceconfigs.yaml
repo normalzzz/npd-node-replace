@@ -1,0 +1,118 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.1-0.20250916065210-6bb7e0623e95
+  name: toleranceconfigs.nodeissuereporter.xingzhan.io
+spec:
+  group: nodeissuereporter.xingzhan.io
+  names:
+    kind: ToleranceConfig
+    listKind: ToleranceConfigList
+    plural: toleranceconfigs
+    singular: toleranceconfig
+  scope: Cluster
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: ToleranceConfig defines tolerance policies for a group of nodes
+          identified by labels.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ToleranceConfigSpec is the spec for a ToleranceConfig resource.
+            properties:
+              configs:
+                description: Configs is the list of tolerance configurations, each
+                  targeting a set of nodes by label.
+                items:
+                  description: ToleranceConfigEntry defines tolerance policy for nodes
+                    matching a specific label.
+                  properties:
+                    action:
+                      description: Action is the action to take when the bucket overflows.
+                        Valid values are "reboot", "replace" or "paging".
+                      type: string
+                    allowOperation:
+                      description: |-
+                        AllowOperation indicates whether npd-node-replace is allowed to perform actions on problem nodes.
+                        If false, only SNS notification is sent to the admin without any reboot/replace action.
+                      type: boolean
+                    bucketSize:
+                      description: BucketSize is the score threshold. When accumulated
+                        score reaches this value, the action is triggered.
+                      format: int32
+                      type: integer
+                    cooldownTimeInMinutes:
+                      description: |-
+                        CooldownTimeInMinutes is the cooldown window (in minutes) after an action is performed.
+                        If the score bucket fills up again within this window, the escalation operation is triggered.
+                      format: int32
+                      type: integer
+                    escalateOperation:
+                      description: |-
+                        EscalateOperation defines the escalation action when the bucket overflows again within the cooldown window.
+                        Valid values are "replace" or "paging".
+                      type: string
+                    eventScores:
+                      description: EventScores defines the score for each event type.
+                      items:
+                        description: EventScore maps an event name to a score value.
+                        properties:
+                          eventName:
+                            description: EventName is the NPD event reason name (e.g.
+                              "OOMKilling", "KernelOops").
+                            type: string
+                          score:
+                            description: Score is the score value assigned to this
+                              event type.
+                            format: int32
+                            type: integer
+                        required:
+                        - eventName
+                        - score
+                        type: object
+                      type: array
+                    maintenanceWindow:
+                      description: |-
+                        MaintenanceWindow defines the time window during which reboot/replace operations are allowed.
+                        Format: "HH:MM-HH:MM" in UTC (e.g. "02:00-06:00"). Empty means no restriction, execute immediately.
+                      type: string
+                    nodeLabel:
+                      description: NodeLabel is the label selector in "key=value"
+                        format to match target nodes.
+                      type: string
+                  required:
+                  - action
+                  - allowOperation
+                  - bucketSize
+                  - eventScores
+                  - nodeLabel
+                  type: object
+                type: array
+            required:
+            - configs
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true

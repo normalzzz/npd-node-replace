@@ -33,6 +33,10 @@ func (c *FakeNodeissuereporterV1alpha1) NodeIssueReports(namespace string) v1alp
 	return newFakeNodeIssueReports(c, namespace)
 }
 
+func (c *FakeNodeissuereporterV1alpha1) ToleranceConfigs() v1alpha1.ToleranceConfigInterface {
+	return newFakeToleranceConfigs(c)
+}
+
 // RESTClient returns a RESTClient that is used to communicate
 // with API server by this client implementation.
 func (c *FakeNodeissuereporterV1alpha1) RESTClient() rest.Interface {

@@ -43,6 +43,18 @@ spec:
             properties:
               action:
                 type: string
+              escalated:
+                description: |-
+                  Escalated indicates whether the current issue has been escalated.
+                  Set to true when the score bucket fills up again within the cooldown window after an action,
+                  triggering the escalateOperation defined in ToleranceConfig.
+                type: boolean
+              lastUpdateTime:
+                description: |-
+                  LastUpdateTime records the last time this resource was updated.
+                  Used to determine staleness for cleanup (notify admin before deletion).
+                format: date-time
+                type: string
               nodename:
                 type: string
               nodeproblems:
@@ -72,12 +84,21 @@ spec:
                 type: string
               phase:
                 type: string
+              scoreInBucket:
+                description: |-
+                  ScoreInBucket is the accumulated event score for this node.
+                  Compared against ToleranceConfig.BucketSize to decide whether to trigger an action.
+                  Reset to 0 after the action is completed.
+                format: int32
+                type: integer
             required:
             - action
+            - escalated
             - nodename
             - nodeproblems
             - nodestatus
             - phase
+            - scoreInBucket
             type: object
         required:
         - spec

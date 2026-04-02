@@ -25,3 +25,7 @@ type NodeIssueReportListerExpansion interface{}
 // NodeIssueReportNamespaceListerExpansion allows custom methods to be added to
 // NodeIssueReportNamespaceLister.
 type NodeIssueReportNamespaceListerExpansion interface{}
+
+// ToleranceConfigListerExpansion allows custom methods to be added to
+// ToleranceConfigLister.
+type ToleranceConfigListerExpansion interface{}
