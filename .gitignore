@@ -416,3 +416,9 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# Go build binary
+xingzhan-node-autoreplace
+
+# Go vendor directory
+vendor/
