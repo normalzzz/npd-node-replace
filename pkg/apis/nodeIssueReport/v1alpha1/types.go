@@ -51,6 +51,12 @@ type NodeIssueReportSpec struct {
 	// Reset to 0 after the action is completed.
 	ScoreInBucket int32 `json:"scoreInBucket"`
 
+	// LastActionTime records when the last action (reboot/replace) was performed.
+	// Used as the lower bound for event scoring: only events after this time are counted.
+	// This prevents already-consumed events from being re-scored after an action completes.
+	// +optional
+	LastActionTime metav1.Time `json:"lastActionTime,omitempty"`
+
 	// Escalated indicates whether the current issue has been escalated.
 	// Set to true when the score bucket fills up again within the cooldown window after an action,
 	// triggering the escalateOperation defined in ToleranceConfig.

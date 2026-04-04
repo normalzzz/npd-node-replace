@@ -129,6 +129,7 @@ func (in *NodeIssueReportSpec) DeepCopyInto(out *NodeIssueReportSpec) {
 		}
 	}
 	in.LastUpdateTime.DeepCopyInto(&out.LastUpdateTime)
+	in.LastActionTime.DeepCopyInto(&out.LastActionTime)
 	return
 }
 

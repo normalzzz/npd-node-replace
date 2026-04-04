@@ -11,6 +11,7 @@ import (
 
 	log "github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/wait"
 	informercorev1 "k8s.io/client-go/informers/core/v1"
 	"k8s.io/client-go/kubernetes"
@@ -36,7 +37,6 @@ const (
 )
 
 type EventController struct {
-	// Add fields here for your controller's state, e.g. clientsets, informers, listers, etc.
 	EventInformer informercorev1.EventInformer
 
 	NodeLister listercorev1.NodeLister
@@ -51,6 +51,8 @@ type EventController struct {
 
 	nodeIssueReportLister nirlister.NodeIssueReportLister
 
+	toleranceConfigLister nirlister.ToleranceConfigLister
+
 	kubeclient kubernetes.Clientset
 
 	nirclient nirclient.Clientset
@@ -58,6 +60,101 @@ type EventController struct {
 	controllerStartTime metav1.Time
 
 	logger log.Entry
+}
+
+// getEventScoreForNode looks up the score for a given event reason on a specific node
+// by matching node labels against ToleranceConfig entries.
+func (c *EventController) getEventScoreForNode(nodename string, eventReason string) int32 {
+	nodeobj, err := c.NodeLister.Get(nodename)
+	if err != nil {
+		c.logger.Errorln("failed to get node object for score lookup:", err)
+		return 0
+	}
+	toleranceConfigs, err := c.toleranceConfigLister.List(labels.Everything())
+	if err != nil || len(toleranceConfigs) == 0 {
+		return 0
+	}
+	nodelabels := nodeobj.GetLabels()
+	for _, tc := range toleranceConfigs {
+		for _, entry := range tc.Spec.Configs {
+			parts := strings.SplitN(entry.NodeLabel, "=", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			if val, exists := nodelabels[parts[0]]; exists && val == parts[1] {
+				for _, es := range entry.EventScores {
+					if es.EventName == eventReason {
+						return es.Score
+					}
+				}
+				return 0
+			}
+		}
+	}
+	return 0
+}
+
+// getToleranceEntryForNode finds the matching ToleranceConfigEntry for a node.
+func (c *EventController) getToleranceEntryForNode(nodename string) *nodeIssueReportv1alpha1.ToleranceConfigEntry {
+	nodeobj, err := c.NodeLister.Get(nodename)
+	if err != nil {
+		return nil
+	}
+	toleranceConfigs, err := c.toleranceConfigLister.List(labels.Everything())
+	if err != nil || len(toleranceConfigs) == 0 {
+		return nil
+	}
+	nodelabels := nodeobj.GetLabels()
+	for _, tc := range toleranceConfigs {
+		for i := range tc.Spec.Configs {
+			entry := &tc.Spec.Configs[i]
+			parts := strings.SplitN(entry.NodeLabel, "=", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			if val, exists := nodelabels[parts[0]]; exists && val == parts[1] {
+				return entry
+			}
+		}
+	}
+	return nil
+}
+
+// recalcScoreInBucket recalculates the score bucket by scanning all events in the
+// NodeIssueReport. Only events that are both:
+//   - within the eventWindow (not older than eventWindowInMinutes from now)
+//   - after LastActionTime (not already consumed by a previous action)
+//
+// are counted toward the score.
+func (c *EventController) recalcScoreInBucket(nir *nodeIssueReportv1alpha1.NodeIssueReport, entry *nodeIssueReportv1alpha1.ToleranceConfigEntry) int32 {
+	eventWindow := time.Duration(entry.EventWindowInMinutes) * time.Minute
+	now := time.Now()
+	windowStart := now.Add(-eventWindow)
+
+	// Use LastActionTime as lower bound if it's set and more recent than windowStart
+	lowerBound := windowStart
+	if !nir.Spec.LastActionTime.IsZero() && nir.Spec.LastActionTime.Time.After(lowerBound) {
+		lowerBound = nir.Spec.LastActionTime.Time
+	}
+
+	scoreMap := make(map[string]int32, len(entry.EventScores))
+	for _, es := range entry.EventScores {
+		scoreMap[es.EventName] = es.Score
+	}
+
+	var total int32
+	for reason, record := range nir.Spec.NodeProblems {
+		score, found := scoreMap[reason]
+		if !found {
+			continue
+		}
+		for _, msg := range record.Message {
+			if msg.Timestamp.Time.After(lowerBound) && now.Sub(msg.Timestamp.Time) <= eventWindow {
+				total += score
+			}
+		}
+	}
+	return total
 }
 
 func (c *EventController) constructNodeIssueReport(event *corev1.Event) nodeIssueReportv1alpha1.NodeIssueReport {
@@ -79,17 +176,21 @@ func (c *EventController) constructNodeIssueReport(event *corev1.Event) nodeIssu
 		Message: []nodeIssueReportv1alpha1.MessageEntry{messageentry},
 	}
 
+	initialScore := c.getEventScoreForNode(event.InvolvedObject.Name, event.Reason)
+
 	return nodeIssueReportv1alpha1.NodeIssueReport{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,
 		},
 		Spec: nodeIssueReportv1alpha1.NodeIssueReportSpec{
-			NodeName:     event.InvolvedObject.Name,
-			NodeProblems: nodeprolems,
-			NodeStatus:   nodeIssueReportv1alpha1.NodeReadyStatus,
-			Action:       nodeIssueReportv1alpha1.None,
-			Phase:        nodeIssueReportv1alpha1.PhaseNone,
+			NodeName:       event.InvolvedObject.Name,
+			NodeProblems:   nodeprolems,
+			NodeStatus:     nodeIssueReportv1alpha1.NodeReadyStatus,
+			Action:         nodeIssueReportv1alpha1.None,
+			Phase:          nodeIssueReportv1alpha1.PhaseNone,
+			ScoreInBucket:  initialScore,
+			LastUpdateTime: metav1.Now(),
 		},
 	}
 }
@@ -128,6 +229,12 @@ func (c *EventController) updateNodeIssueReport(nodeissuereport *nodeIssueReport
 			Message: []nodeIssueReportv1alpha1.MessageEntry{messageentry},
 		}
 	}
+	// Recalculate score bucket based on event window - only events within the time window count
+	entry := c.getToleranceEntryForNode(nodeissuereport.Spec.NodeName)
+	if entry != nil {
+		nodeissuereport.Spec.ScoreInBucket = c.recalcScoreInBucket(nodeissuereport, entry)
+	}
+	nodeissuereport.Spec.LastUpdateTime = metav1.Now()
 	_, err := c.nirclient.NodeissuereporterV1alpha1().NodeIssueReports(nodeissuereport.Namespace).Update(context.Background(), nodeissuereport, metav1.UpdateOptions{})
 	if err != nil {
 		c.logger.Errorln("failed to update node issue report", err)
@@ -360,7 +467,7 @@ func (c *EventController) isNodeProblemDetectorEvent(e *corev1.Event) bool {
 	return false
 }
 
-func NewEventController(eventInformer informercorev1.EventInformer, nodeIssueReportInformer nirinformer.NodeIssueReportInformer, kubeclient kubernetes.Clientset, nirclient nirclient.Clientset, nodeInformer informercorev1.NodeInformer) *EventController {
+func NewEventController(eventInformer informercorev1.EventInformer, nodeIssueReportInformer nirinformer.NodeIssueReportInformer, toleranceConfigInformer nirinformer.ToleranceConfigInformer, kubeclient kubernetes.Clientset, nirclient nirclient.Clientset, nodeInformer informercorev1.NodeInformer) *EventController {
 
 	c := EventController{
 		EventInformer:           eventInformer,
@@ -370,6 +477,7 @@ func NewEventController(eventInformer informercorev1.EventInformer, nodeIssueRep
 		queue:                   workqueue.NewTypedRateLimitingQueue(workqueue.NewTypedItemExponentialFailureRateLimiter[string](1*time.Second, 30*time.Second)),
 		EventLister:             eventInformer.Lister(),
 		nodeIssueReportLister:   nodeIssueReportInformer.Lister(),
+		toleranceConfigLister:   toleranceConfigInformer.Lister(),
 		kubeclient:              kubeclient,
 		nirclient:               nirclient,
 		controllerStartTime:     metav1.Time{Time: time.Now()},

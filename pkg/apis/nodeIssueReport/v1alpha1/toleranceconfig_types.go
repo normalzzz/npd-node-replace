@@ -59,15 +59,15 @@ type ToleranceConfigEntry struct {
 	// +optional
 	CooldownTimeInMinutes int32 `json:"cooldownTimeInMinutes,omitempty"`
 
-	// MaintenanceWindow defines the time window during which reboot/replace operations are allowed.
-	// Format: "HH:MM-HH:MM" in UTC (e.g. "02:00-06:00"). Empty means no restriction, execute immediately.
-	// +optional
-	MaintenanceWindow string `json:"maintenanceWindow,omitempty"`
+	// EventWindowInMinutes is the sliding time window (in minutes) for scoring events.
+	// Only events whose timestamp falls within [now - EventWindowInMinutes, now] are counted
+	// toward the score bucket. Events older than this window are considered expired and ignored.
+	EventWindowInMinutes int32 `json:"eventWindowInMinutes"`
 
 	// EscalateOperation defines the escalation action when the bucket overflows again within the cooldown window.
 	// Valid values are "replace" or "paging".
 	// +optional
-	EscalateOperation string `json:"escalateOperation,omitempty"`
+	EscalateOperation EscalationAction `json:"escalateOperation,omitempty"`
 
 	// EventScores defines the score for each event type.
 	EventScores []EventScore `json:"eventScores"`
@@ -91,3 +91,10 @@ type ToleranceConfigList struct {
 
 	Items []ToleranceConfig `json:"items"`
 }
+
+type EscalationAction string
+const (
+	replace EscalationAction = "replace"
+	paging EscalationAction = "paging"
+	none EscalationAction = "none"
+)

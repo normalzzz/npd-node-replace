@@ -91,11 +91,13 @@ spec:
                         - score
                         type: object
                       type: array
-                    maintenanceWindow:
+                    eventWindowInMinutes:
                       description: |-
-                        MaintenanceWindow defines the time window during which reboot/replace operations are allowed.
-                        Format: "HH:MM-HH:MM" in UTC (e.g. "02:00-06:00"). Empty means no restriction, execute immediately.
-                      type: string
+                        EventWindowInMinutes is the sliding time window (in minutes) for scoring events.
+                        Only events whose timestamp falls within [now - EventWindowInMinutes, now] are counted
+                        toward the score bucket. Events older than this window are considered expired and ignored.
+                      format: int32
+                      type: integer
                     nodeLabel:
                       description: NodeLabel is the label selector in "key=value"
                         format to match target nodes.
@@ -105,6 +107,7 @@ spec:
                   - allowOperation
                   - bucketSize
                   - eventScores
+                  - eventWindowInMinutes
                   - nodeLabel
                   type: object
                 type: array

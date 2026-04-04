@@ -1,0 +1,53 @@
+apiVersion: nodeissuereporter.xingzhan.io/v1alpha1
+kind: ToleranceConfig
+metadata:
+  name: cluster-tolerance-policy
+spec:
+  configs:
+    # GPU 节点：问题严重，先 reboot，cooldown 内再出问题直接 replace
+    - nodeLabel: "node.kubernetes.io/instance-type=p3.2xlarge"
+      bucketSize: 100
+      action: reboot
+      allowOperation: true
+      cooldownTimeInMinutes: 30
+      eventWindowInMinutes: 60
+      escalateOperation: replace
+      eventScores:
+        - eventName: OOMKilling
+          score: 30
+        - eventName: KernelOops
+          score: 50
+        - eventName: ReadonlyFilesystem
+          score: 100
+        - eventName: DockerHung
+          score: 40
+
+    # 通用计算节点：先 reboot，cooldown 内再出问题只告警不操作
+    - nodeLabel: "eks.amazonaws.com/nodegroup=general-compute"
+      bucketSize: 80
+      action: reboot
+      allowOperation: true
+      cooldownTimeInMinutes: 20
+      eventWindowInMinutes: 45
+      escalateOperation: paging
+      eventScores:
+        - eventName: OOMKilling
+          score: 20
+        - eventName: KernelOops
+          score: 40
+        - eventName: NTPProblem
+          score: 15
+        - eventName: NetworkUnavailable
+          score: 30
+
+    # 监控节点：不允许自动操作，只通知管理员
+    - nodeLabel: "role=monitoring"
+      bucketSize: 50
+      action: paging
+      allowOperation: false
+      eventWindowInMinutes: 30
+      eventScores:
+        - eventName: OOMKilling
+          score: 25
+        - eventName: KernelOops
+          score: 50

@@ -49,6 +49,13 @@ spec:
                   Set to true when the score bucket fills up again within the cooldown window after an action,
                   triggering the escalateOperation defined in ToleranceConfig.
                 type: boolean
+              lastActionTime:
+                description: |-
+                  LastActionTime records when the last action (reboot/replace) was performed.
+                  Used as the lower bound for event scoring: only events after this time are counted.
+                  This prevents already-consumed events from being re-scored after an action completes.
+                format: date-time
+                type: string
               lastUpdateTime:
                 description: |-
                   LastUpdateTime records the last time this resource was updated.
