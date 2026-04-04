@@ -252,7 +252,7 @@ func (n *NIRController) processNextItem() bool {
 		if nodeIssueReport.Name == n.selfnodename {
 
 			// Notify admin with SNS
-			if err := n.awsOperator.SNSNotify(*nodeIssueReport, false); err != nil {
+			if err := n.awsOperator.SNSNotify(*nodeIssueReport, "replace"); err != nil {
 				n.logger.Error("[node drained phase] failed to notify admin when replace node", err)
 				n.queue.AddRateLimited(key)
 				return true
@@ -278,7 +278,7 @@ func (n *NIRController) processNextItem() bool {
 
 			}
 		} else {
-			if err := n.awsOperator.SNSNotify(*nodeIssueReport, false); err != nil {
+			if err := n.awsOperator.SNSNotify(*nodeIssueReport, "replace"); err != nil {
 				n.logger.Error("[node drained phase] failed to notify admin when replace node", err)
 				n.queue.AddRateLimited(key)
 				return true
@@ -445,16 +445,21 @@ func (n *NIRController) processNextItem() bool {
 		}
 		n.logger.Infoln("[node rebooted phase] successfully uncordoned node:", nodename)
 
-		if err := n.awsOperator.SNSNotify(*nodeIssueReport, false); err != nil {
+		if err := n.awsOperator.SNSNotify(*nodeIssueReport, "reboot"); err != nil {
 			n.logger.Error("[node rebooted phase] failed to notify admin after reboot completed", err)
 		}
 
-		if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Delete(context.TODO(), nodeIssueReport.Spec.NodeName, metav1.DeleteOptions{}); err != nil {
-			n.logger.Errorln("[node rebooted phase] failed to delete nodeIssueReport", nodeIssueReport.Name)
+		// Reboot is not a terminal action - keep NIR for escalation evaluation.
+		// Reset phase and action back to None so new events can accumulate scores again.
+		nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseNone
+		nodeIssueReport.Spec.Action = nodeIssueReportv1alpha1.None
+		nodeIssueReport.Spec.LastUpdateTime = metav1.Now()
+		if _, err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.TODO(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
+			n.logger.Errorln("[node rebooted phase] failed to reset NIR after reboot:", err)
 			n.queue.AddRateLimited(key)
 			return true
 		}
-		n.logger.Infoln("[node rebooted phase] reboot Action done, deleted nodeIssueReport:", nodeIssueReport.Name)
+		n.logger.Infoln("[node rebooted phase] reboot completed, NIR reset to PhaseNone for escalation evaluation:", nodeIssueReport.Name)
 		return true
 	}
 
@@ -492,7 +497,7 @@ func (n *NIRController) processNextItem() bool {
 		n.logger.Infoln("[node reboot phase] successfully rebooted node:", nodename)
 
 		// TODO: add function to notice user what happened, for investigating root cause
-		if err := n.awsOperator.SNSNotify(*nodeIssueReport, false); err != nil {
+		if err := n.awsOperator.SNSNotify(*nodeIssueReport, "reboot"); err != nil {
 			n.logger.Error("[node reboot phase] failed to notify admin when reboot node", err)
 		}
 		nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseRebooted
@@ -526,18 +531,21 @@ func (n *NIRController) processNextItem() bool {
 
 		if !toleranceEntry.AllowOperation {
 			n.logger.Infoln("ToleranceConfig.allowOperation is false for node:", nodename, ", only notify admin, skip action")
-			if err := n.awsOperator.SNSNotify(*nodeIssueReport, true); err != nil {
+			if err := n.awsOperator.SNSNotify(*nodeIssueReport, "not-allowed"); err != nil {
 				n.logger.Error("[node problem detected, skip node] failed to notify admin", err)
 				n.queue.AddRateLimited(key)
 				return true
 			}
-			// the nodeissuereport resource could be kept,need do actions
-			if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Delete(context.TODO(), nodeIssueReport.Name, metav1.DeleteOptions{}); err != nil {
-				n.logger.Errorln("[node problem detected, skip node] failed to delete nodeIssueReport", nodeIssueReport.Name, "with error:", err)
+			// Reset NIR - don't delete, admin may want to investigate
+			nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseNone
+			nodeIssueReport.Spec.Action = nodeIssueReportv1alpha1.None
+			nodeIssueReport.Spec.LastUpdateTime = metav1.Now()
+			if _, err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.TODO(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
+				n.logger.Errorln("[node problem detected, skip node] failed to reset nodeIssueReport:", err)
 				n.queue.AddRateLimited(key)
 				return true
 			}
-			n.logger.Infoln("[node problem detected, skip node] notified admin and deleted nodeIssueReport:", nodeIssueReport.Name)
+			n.logger.Infoln("[node problem detected, skip node] notified admin and reset nodeIssueReport:", nodeIssueReport.Name)
 			return true
 		}
 
@@ -554,10 +562,30 @@ func (n *NIRController) processNextItem() bool {
 				nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseReplace
 			case nodeIssueReportv1alpha1.Paging:
 				n.logger.Infoln("[paging] action is paging, notify admin only for node:", nodename)
-				if err := n.awsOperator.SNSNotify(*nodeIssueReport, true); err != nil {
+				reason := "paging"
+				if nodeIssueReport.Spec.Escalated {
+					reason = "escalate-paging"
+				}
+				if err := n.awsOperator.SNSNotify(*nodeIssueReport, reason); err != nil {
 					n.logger.Error("[paging] failed to notify admin", err)
 					n.queue.AddRateLimited(key)
 					return true
+				}
+				if nodeIssueReport.Spec.Escalated {
+					// Escalated paging is a terminal action - delete NIR
+					n.logger.Infoln("[paging] escalated paging completed, deleting NIR for node:", nodename)
+					if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Delete(context.TODO(), nodeIssueReport.Name, metav1.DeleteOptions{}); err != nil {
+						n.logger.Errorln("[paging] failed to delete nodeIssueReport after escalated paging:", err)
+						n.queue.AddRateLimited(key)
+					}
+					return true
+				}
+				// Non-escalated paging: reset NIR for escalation evaluation
+				nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseNone
+				nodeIssueReport.Spec.Action = nodeIssueReportv1alpha1.None
+				nodeIssueReport.Spec.LastUpdateTime = metav1.Now()
+				if _, err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.TODO(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
+					n.logger.Errorln("[paging] failed to reset NIR after paging:", err)
 				}
 				return true
 			default:
@@ -673,21 +701,55 @@ func (n *NIRController) worker() {
 
 func (n *NIRController) Run(stopch <-chan struct{}) {
 	n.logger.Println("Worker is processing events...")
-	//tolerance, err := config.LoadConfiguration()
-
-	//if err != nil {
-	//	n.logger.Fatal("failed to load tolerance configuration", err)
-	//}
 
 	for i := 0; i < workercount; i++ {
 		go wait.Until(n.worker, time.Second, stopch)
 	}
 
+	// Periodic cleanup of expired NIR resources whose cooldown has passed
+	go wait.Until(n.cleanupExpiredNIRs, 1*time.Minute, stopch)
+
 	<-stopch
-	// TODO delete all the NodeIssueReport resources
 	n.logger.Infoln("Shutting down NIRController")
 	close(newNodeChan)
+}
 
+// cleanupExpiredNIRs scans all NodeIssueReport resources and deletes those
+// whose cooldown has expired with no pending action (i.e. no escalation triggered).
+func (n *NIRController) cleanupExpiredNIRs() {
+	nirList, err := n.nodeIssueReportLister.List(labels.Everything())
+	if err != nil {
+		n.logger.Errorln("[lifecycle cleanup] failed to list NodeIssueReport resources:", err)
+		return
+	}
+	for _, nir := range nirList {
+		if nir.Spec.LastActionTime.IsZero() ||
+			nir.Spec.Action != nodeIssueReportv1alpha1.None ||
+			nir.Spec.Phase != nodeIssueReportv1alpha1.PhaseNone {
+			continue
+		}
+
+		nodeobj, err := n.nodelister.Get(nir.Spec.NodeName)
+		if err != nil {
+			continue
+		}
+		toleranceEntry, err := n.getToleranceConfigForNode(nodeobj)
+		if err != nil || toleranceEntry == nil || toleranceEntry.CooldownTimeInMinutes <= 0 {
+			continue
+		}
+
+		cooldown := time.Duration(toleranceEntry.CooldownTimeInMinutes) * time.Minute
+		if time.Since(nir.Spec.LastActionTime.Time) > cooldown {
+			n.logger.Infof("[lifecycle cleanup] cooldown expired for node %s (last action %v ago), cleaning up NIR",
+				nir.Spec.NodeName, time.Since(nir.Spec.LastActionTime.Time).Round(time.Second))
+			if err := n.awsOperator.SNSNotify(*nir, "cooldown-expired"); err != nil {
+				n.logger.Error("[lifecycle cleanup] failed to send final status notification:", err)
+			}
+			if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(nir.Namespace).Delete(context.TODO(), nir.Name, metav1.DeleteOptions{}); err != nil {
+				n.logger.Errorln("[lifecycle cleanup] failed to delete expired NIR:", nir.Name, err)
+			}
+		}
+	}
 }
 
 func NewNIRController(nodeIssueReportInformer nodeIssueReport.NodeIssueReportInformer, toleranceConfigInformer nodeIssueReport.ToleranceConfigInformer, nodeIssueReportClient nirclient.Clientset, kubeclient kubernetes.Clientset, awsOperator awspkg.AwsOperator, nodeInformer informercorev1.NodeInformer) *NIRController {

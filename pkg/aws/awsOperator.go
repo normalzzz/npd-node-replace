@@ -95,12 +95,11 @@ func (a *AwsOperator) GetASGId(instanceid string) (string, error) {
 	//return ""
 }
 
-func (a *AwsOperator) SNSNotify(nodeissuereport nodeIssueReportv1alpha1.NodeIssueReport, NotDoActions bool) error {
+func (a *AwsOperator) SNSNotify(nodeissuereport nodeIssueReportv1alpha1.NodeIssueReport, reason string) error {
 	snstopic := os.Getenv("SNS_TOPIC_ARN")
 	action := nodeissuereport.Spec.Action
 	nodeProblems := nodeissuereport.Spec.NodeProblems
 	nodeProblemsJson, err := json.Marshal(nodeProblems)
-	// nodestatus := nodeissuereport.Spec.NodeStatus
 	if err != nil {
 		log.Errorln(" while try to publish node issue through sns, Marshal nodeProblems object , error happened:", err)
 		return err
@@ -111,74 +110,46 @@ func (a *AwsOperator) SNSNotify(nodeissuereport nodeIssueReportv1alpha1.NodeIssu
 		return err
 	}
 
-	if NotDoActions {
-		snsSubject := "[From npd-node-replace]: Your node has issues detected, but we do not do any action on it"
-		nodeissuereportmessage := fmt.Sprintf(`
-		NodeName: %s
-		NodeStatus: %s
-		Issue Happened: %s
-		Action Taken: %s
-		Full NodeIssueReport Object: %s
-		`, nodeissuereport.Spec.NodeName, nodeissuereport.Spec.NodeStatus, string(nodeProblemsJson), action, string(fulljson))
-		snspublistInput := sns.PublishInput{
-			TopicArn: &snstopic,
-			Subject:  &snsSubject,
-			Message:  &nodeissuereportmessage,
-		}
-		_, err = a.snscli.Publish(context.TODO(), &snspublistInput)
-
-		if err != nil {
-			log.Errorln("failed to send email message to SNS topic with error", err)
-			return err
-		}
-		return nil
+	var snsSubject string
+	switch reason {
+	case "reboot":
+		snsSubject = "[npd-node-replace] Node REBOOTED due to persistent issues"
+	case "replace":
+		snsSubject = "[npd-node-replace] Node REPLACED due to persistent issues"
+	case "paging":
+		snsSubject = "[npd-node-replace] Node issues detected - admin notification (paging)"
+	case "not-allowed":
+		snsSubject = "[npd-node-replace] Node issues detected - auto-action disabled, notify only"
+	case "cooldown-expired":
+		snsSubject = "[npd-node-replace] Node issue report cleanup - cooldown expired, no escalation triggered"
+	case "escalate-paging":
+		snsSubject = "[npd-node-replace] ESCALATION - repeated issues after action, admin notification"
+	default:
+		snsSubject = fmt.Sprintf("[npd-node-replace] Node issue notification (%s)", reason)
 	}
 
-	if action == nodeIssueReportv1alpha1.Reboot {
-		snsSubject := "[From npd-node-replace]: Your node has been REBOOTED, because some unbearable issues have happened"
-		nodeissuereportmessage := fmt.Sprintf(`
-		NodeName: %s
-		NodeStatus: %s
-		Issue Happened: %s
-		Action Taken: %s
-		Full NodeIssueReport Object: %s
-		`, nodeissuereport.Spec.NodeName, nodeissuereport.Spec.NodeStatus, string(nodeProblemsJson), action, string(fulljson))
-		snspublistInput := sns.PublishInput{
-			TopicArn: &snstopic,
-			Subject:  &snsSubject,
-			Message:  &nodeissuereportmessage,
-		}
-		_, err = a.snscli.Publish(context.TODO(), &snspublistInput)
+	nodeissuereportmessage := fmt.Sprintf(`
+NodeName: %s
+NodeStatus: %s
+Issues Detected: %s
+Action: %s
+Escalated: %v
+ScoreInBucket: %d
+Reason: %s
+Full NodeIssueReport: %s
+`, nodeissuereport.Spec.NodeName, nodeissuereport.Spec.NodeStatus, string(nodeProblemsJson), action, nodeissuereport.Spec.Escalated, nodeissuereport.Spec.ScoreInBucket, reason, string(fulljson))
 
-		if err != nil {
-			log.Errorln("failed to send email message to SNS topic with error", err)
-			return err
-		}
-
+	snspublishInput := sns.PublishInput{
+		TopicArn: &snstopic,
+		Subject:  &snsSubject,
+		Message:  &nodeissuereportmessage,
 	}
-
-	if action == nodeIssueReportv1alpha1.Replace {
-		snsSubject := "[From npd-node-replace]: Your node has been REPLACED, because some unbearable issues have happened"
-		nodeissuereportmessage := fmt.Sprintf(`
-		NodeName: %s
-		Issue Happened: %s
-		Action Taken: %s
-		Full NodeIssueReport Object: %s
-		`, nodeissuereport.Spec.NodeName, string(nodeProblemsJson), action, string(fulljson))
-		snspublistInput := sns.PublishInput{
-			TopicArn: &snstopic,
-			Subject:  &snsSubject,
-			Message:  &nodeissuereportmessage,
-		}
-		_, err = a.snscli.Publish(context.TODO(), &snspublistInput)
-
-		if err != nil {
-			log.Errorln("failed to send email message to SNS topic with error", err)
-			return err
-		}
+	_, err = a.snscli.Publish(context.TODO(), &snspublishInput)
+	if err != nil {
+		log.Errorln("failed to send SNS notification with error", err)
+		return err
 	}
 	return nil
-
 }
 
 func NewAwsOperator(config aws.Config) *AwsOperator {
