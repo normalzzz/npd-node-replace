@@ -1,0 +1,39 @@
+kubernetesClusterDomain: cluster.local
+
+npdNodeReplace:
+  replicas: 2
+  image:
+    repository: zxxxxzz/npd-node-replace
+    tag: latest
+  imagePullPolicy: Always
+  env:
+    snsTopicArn: ""
+    awsRegion: ""
+    nodeDoubleCheckGraceTime: 5
+
+sa:
+  serviceAccount:
+    create: false
+    annotations:
+      eks.amazonaws.com/role-arn: ""
+
+# ToleranceConfig CRD resource - applied as a cluster-scoped CR
+toleranceConfig:
+  # Set to true to have the chart create a ToleranceConfig CR
+  create: true
+  name: cluster-tolerance-policy
+  configs:
+    - nodeLabel: "eks.amazonaws.com/nodegroup=general-compute"
+      bucketSize: 80
+      action: reboot
+      allowOperation: true
+      cooldownTimeInMinutes: 20
+      eventWindowInMinutes: 45
+      escalateOperation: paging
+      eventScores:
+        - eventName: OOMKilling
+          score: 20
+        - eventName: KernelOops
+          score: 40
+        - eventName: NTPProblem
+          score: 15

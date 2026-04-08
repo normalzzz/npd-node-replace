@@ -1,0 +1,11 @@
+{{- if .Values.toleranceConfig.create -}}
+apiVersion: nodeissuereporter.xingzhan.io/v1alpha1
+kind: ToleranceConfig
+metadata:
+  name: {{ .Values.toleranceConfig.name | default "cluster-tolerance-policy" }}
+  labels:
+  {{- include "npd-node-replace-v2.labels" . | nindent 4 }}
+spec:
+  configs:
+  {{- toYaml .Values.toleranceConfig.configs | nindent 4 }}
+{{- end }}
