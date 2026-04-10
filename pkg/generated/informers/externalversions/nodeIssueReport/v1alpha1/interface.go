@@ -26,6 +26,8 @@ import (
 type Interface interface {
 	// NodeIssueReports returns a NodeIssueReportInformer.
 	NodeIssueReports() NodeIssueReportInformer
+	// ToleranceConfigs returns a ToleranceConfigInformer.
+	ToleranceConfigs() ToleranceConfigInformer
 }
 
 type version struct {
@@ -42,4 +44,9 @@ func New(f internalinterfaces.SharedInformerFactory, namespace string, tweakList
 // NodeIssueReports returns a NodeIssueReportInformer.
 func (v *version) NodeIssueReports() NodeIssueReportInformer {
 	return &nodeIssueReportInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
+}
+
+// ToleranceConfigs returns a ToleranceConfigInformer.
+func (v *version) ToleranceConfigs() ToleranceConfigInformer {
+	return &toleranceConfigInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
 }

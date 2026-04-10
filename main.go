@@ -20,6 +20,7 @@ import (
 	nirclient "xingzhan-node-autoreplace/pkg/generated/clientset/versioned"
 	nodeissuereportinformer "xingzhan-node-autoreplace/pkg/generated/informers/externalversions"
 	le "xingzhan-node-autoreplace/pkg/leaderelection"
+	"xingzhan-node-autoreplace/pkg/metrics"
 	"xingzhan-node-autoreplace/pkg/signal"
 )
 
@@ -63,6 +64,13 @@ func main() {
 		leaseNamespace = "default"
 	}
 
+	// Start metrics server (runs regardless of leader election)
+	metricsAddr := os.Getenv("METRICS_ADDR")
+	if metricsAddr == "" {
+		metricsAddr = ":9090"
+	}
+	go metrics.StartMetricsServer(metricsAddr)
+
 	stopCh := signal.SetupSignalHandler()
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -87,9 +95,10 @@ func onStartedLeading(clientset *kubernetes.Clientset, nirClient *nirclient.Clie
 		eventInformer := kubefactory.Core().V1().Events()
 		nodeInformer := kubefactory.Core().V1().Nodes()
 		nodeIssueReportInformer := nodeIssueReportFactory.Nodeissuereporter().V1alpha1().NodeIssueReports()
+		toleranceConfigInformer := nodeIssueReportFactory.Nodeissuereporter().V1alpha1().ToleranceConfigs()
 
-		eventcontroller := controller.NewEventController(eventInformer, nodeIssueReportInformer, *clientset, *nirClient, nodeInformer)
-		nircontroller := controller.NewNIRController(nodeIssueReportInformer, *nirClient, *clientset, *awsOperator, nodeInformer)
+		eventcontroller := controller.NewEventController(eventInformer, nodeIssueReportInformer, toleranceConfigInformer, *clientset, *nirClient, nodeInformer)
+		nircontroller := controller.NewNIRController(nodeIssueReportInformer, toleranceConfigInformer, *nirClient, *clientset, *awsOperator, nodeInformer)
 		nodecontroller := controller.NewNodeController(nodeInformer, *nirClient, nodeIssueReportInformer)
 
 		leaderStopCh := ctx.Done()

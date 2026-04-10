@@ -29,6 +29,7 @@ import (
 type NodeissuereporterV1alpha1Interface interface {
 	RESTClient() rest.Interface
 	NodeIssueReportsGetter
+	ToleranceConfigsGetter
 }
 
 // NodeissuereporterV1alpha1Client is used to interact with features provided by the nodeissuereporter.xingzhan.io group.
@@ -38,6 +39,10 @@ type NodeissuereporterV1alpha1Client struct {
 
 func (c *NodeissuereporterV1alpha1Client) NodeIssueReports(namespace string) NodeIssueReportInterface {
 	return newNodeIssueReports(c, namespace)
+}
+
+func (c *NodeissuereporterV1alpha1Client) ToleranceConfigs() ToleranceConfigInterface {
+	return newToleranceConfigs(c)
 }
 
 // NewForConfig creates a new NodeissuereporterV1alpha1Client for the given config.

@@ -39,8 +39,28 @@ type NodeIssueReportSpec struct {
 	NodeProblems map[string]ProblemRecord `json:"nodeproblems"`
 	NodeStatus   NodeStatus               `json:"nodestatus"`
 	Action       Action                   `json:"action"`
-	// ForceAction  bool                     `json:"force"`
-	Phase 		 Phase 					  `json:"phase"`
+	Phase        Phase                    `json:"phase"`
+
+	// LastUpdateTime records the last time this resource was updated.
+	// Used to determine staleness for cleanup (notify admin before deletion).
+	// +optional
+	LastUpdateTime metav1.Time `json:"lastUpdateTime,omitempty"`
+
+	// ScoreInBucket is the accumulated event score for this node.
+	// Compared against ToleranceConfig.BucketSize to decide whether to trigger an action.
+	// Reset to 0 after the action is completed.
+	ScoreInBucket int32 `json:"scoreInBucket"`
+
+	// LastActionTime records when the last action (reboot/replace) was performed.
+	// Used as the lower bound for event scoring: only events after this time are counted.
+	// This prevents already-consumed events from being re-scored after an action completes.
+	// +optional
+	LastActionTime metav1.Time `json:"lastActionTime,omitempty"`
+
+	// Escalated indicates whether the current issue has been escalated.
+	// Set to true when the score bucket fills up again within the cooldown window after an action,
+	// triggering the escalateOperation defined in ToleranceConfig.
+	Escalated bool `json:"escalated"`
 }
 
 // NodeIssueReportStatus is the status for a NodeIssueReport resource
@@ -70,27 +90,30 @@ type MessageEntry struct {
 }
 
 type Action string
+
 const (
 	Reboot  Action = "reboot"
 	Replace Action = "replace"
+	Paging  Action = "paging"
 	None    Action = "none"
 )
 
 const (
-	NodeNotReadyStatus NodeStatus  = "NotReady"
-	NodeReadyStatus   NodeStatus = "Ready"
-	NodeUnknownStatus NodeStatus = "Unknown"
+	NodeNotReadyStatus NodeStatus = "NotReady"
+	NodeReadyStatus    NodeStatus = "Ready"
+	NodeUnknownStatus  NodeStatus = "Unknown"
 )
 
 type NodeStatus string
 
 type Phase string
+
 const (
-	PhaseNone Phase = "phasenone"
-	PhaseReplace Phase = "phasereplace"
-	PhaseReboot Phase = "phasereboot"
-	PhaseRebooted Phase = "phaserebooted"
-	PhaseDetached Phase = "phasedetached"
+	PhaseNone      Phase = "phasenone"
+	PhaseReplace   Phase = "phasereplace"
+	PhaseReboot    Phase = "phasereboot"
+	PhaseRebooted  Phase = "phaserebooted"
+	PhaseDetached  Phase = "phasedetached"
 	PhaseNewJoined Phase = "phaseneejoined"
-	PhaseDrained Phase = "phasedrained"
+	PhaseDrained   Phase = "phasedrained"
 )

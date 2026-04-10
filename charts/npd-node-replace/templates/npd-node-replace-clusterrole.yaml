@@ -47,6 +47,14 @@ rules:
   - create
   - delete
   - update
+- apiGroups:
+  - nodeissuereporter.xingzhan.io
+  resources:
+  - toleranceconfigs
+  verbs:
+  - get
+  - list
+  - watch
 - apiGroups: 
   - policy
   resources: 

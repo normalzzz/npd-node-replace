@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "npd-node-replace-v2.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: npd-node-replace
+  {{- include "npd-node-replace-v2.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.npdNodeReplace.replicas }}
+  selector:
+    matchLabels:
+      app: npd-node-replace
+    {{- include "npd-node-replace-v2.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        app: npd-node-replace
+      {{- include "npd-node-replace-v2.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccount: npd-node-replace-sa
+      dnsPolicy: Default
+      containers:
+      - name: npd-node-replace
+        image: {{ .Values.npdNodeReplace.image.repository }}:{{ .Values.npdNodeReplace.image.tag | default .Chart.AppVersion }}
+        imagePullPolicy: {{ .Values.npdNodeReplace.imagePullPolicy }}
+        env:
+        - name: SELF_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: SELF_POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: SELF_NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: SNS_TOPIC_ARN
+          value: {{ quote .Values.npdNodeReplace.env.snsTopicArn }}
+        - name: AWS_REGION
+          value: {{ quote .Values.npdNodeReplace.env.awsRegion }}
+        - name: NODE_DOULBE_CHECK_GRACE_TIME
+          value: {{ quote .Values.npdNodeReplace.env.nodeDoubleCheckGraceTime }}
+        - name: KUBERNETES_CLUSTER_DOMAIN
+          value: {{ quote .Values.kubernetesClusterDomain }}
+        ports:
+        - name: metrics
+          containerPort: 9090
+          protocol: TCP
+        resources: {}

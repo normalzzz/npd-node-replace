@@ -3,17 +3,16 @@ package controller
 import (
 	"context"
 	"encoding/json"
-	plainerr "errors"
+	"fmt"
 	"os"
 	"strings"
 	"time"
 	awspkg "xingzhan-node-autoreplace/pkg/aws"
-	"xingzhan-node-autoreplace/pkg/config"
 	nirclient "xingzhan-node-autoreplace/pkg/generated/clientset/versioned"
 	nodeIssueReport "xingzhan-node-autoreplace/pkg/generated/informers/externalversions/nodeIssueReport/v1alpha1"
+	"xingzhan-node-autoreplace/pkg/metrics"
 
 	"k8s.io/apimachinery/pkg/api/errors"
-
 	"k8s.io/apimachinery/pkg/labels"
 
 	log "github.com/sirupsen/logrus"
@@ -43,10 +42,10 @@ var newNodeChan chan string
 type NIRController struct {
 	nodeIssueReportInformer nodeIssueReport.NodeIssueReportInformer
 
-	queue workqueue.TypedRateLimitingInterface[string]
-	// Add fields here for your controller's state, e.g. clientsets, informers, listers, etc.
+	toleranceConfigInformer nodeIssueReport.ToleranceConfigInformer
+	toleranceConfigLister   nodeIssueReportLister.ToleranceConfigLister
 
-	toleranceConfig *config.ToleranceCollection
+	queue workqueue.TypedRateLimitingInterface[string]
 
 	nodeIssueReportLister nodeIssueReportLister.NodeIssueReportLister
 	nodeIssueReportClient nirclient.Clientset
@@ -214,6 +213,47 @@ func (n *NIRController) drainNode(nodeobj v1.Node, forcely bool) error {
 
 }
 
+// countActiveActionsForEntry counts how many NIRs matching the given tolerance entry
+// are currently in an active phase (not PhaseNone).
+func (n *NIRController) countActiveActionsForEntry(entry *nodeIssueReportv1alpha1.ToleranceConfigEntry) int32 {
+	nirList, err := n.nodeIssueReportLister.List(labels.Everything())
+	if err != nil {
+		return 0
+	}
+	parts := strings.SplitN(entry.NodeLabel, "=", 2)
+	if len(parts) != 2 {
+		return 0
+	}
+	var count int32
+	for _, nir := range nirList {
+		if nir.Spec.Phase == nodeIssueReportv1alpha1.PhaseNone {
+			continue
+		}
+		nodeobj, err := n.nodelister.Get(nir.Spec.NodeName)
+		if err != nil {
+			continue
+		}
+		if val, exists := nodeobj.GetLabels()[parts[0]]; exists && val == parts[1] {
+			count++
+		}
+	}
+	return count
+}
+
+// isDryRun checks if the tolerance entry has dry-run mode enabled.
+// In dry-run mode, sends an SNS notification about what would happen but takes no action.
+func (n *NIRController) isDryRun(entry *nodeIssueReportv1alpha1.ToleranceConfigEntry, nir *nodeIssueReportv1alpha1.NodeIssueReport, action string) bool {
+	if !entry.DryRun {
+		return false
+	}
+	reason := fmt.Sprintf("dry-run-%s", action)
+	n.logger.Infof("[dry-run] would execute %s on node %s, but dry-run is enabled", action, nir.Spec.NodeName)
+	if err := n.awsOperator.SNSNotify(*nir, reason); err != nil {
+		n.logger.Errorf("[dry-run] failed to send dry-run notification: %v", err)
+	}
+	return true
+}
+
 func (n *NIRController) processNextItem() bool {
 	key, shutdown := n.queue.Get()
 	if shutdown {
@@ -241,7 +281,6 @@ func (n *NIRController) processNextItem() bool {
 	nodename := nodeIssueReport.Spec.NodeName
 
 	nodeobj, err := n.nodelister.Get(nodename)
-
 	if errors.IsNotFound(err) {
 		n.logger.Infoln("node object not found, may be already deleted:", nodename)
 		return true
@@ -252,13 +291,11 @@ func (n *NIRController) processNextItem() bool {
 		return true
 	}
 
-	problems := nodeIssueReport.Spec.NodeProblems
-
 	if nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseDrained {
 		if nodeIssueReport.Name == n.selfnodename {
 
 			// Notify admin with SNS
-			if err := n.awsOperator.SNSNotify(*nodeIssueReport, false); err != nil {
+			if err := n.awsOperator.SNSNotify(*nodeIssueReport, "replace"); err != nil {
 				n.logger.Error("[node drained phase] failed to notify admin when replace node", err)
 				n.queue.AddRateLimited(key)
 				return true
@@ -284,7 +321,7 @@ func (n *NIRController) processNextItem() bool {
 
 			}
 		} else {
-			if err := n.awsOperator.SNSNotify(*nodeIssueReport, false); err != nil {
+			if err := n.awsOperator.SNSNotify(*nodeIssueReport, "replace"); err != nil {
 				n.logger.Error("[node drained phase] failed to notify admin when replace node", err)
 				n.queue.AddRateLimited(key)
 				return true
@@ -413,35 +450,59 @@ func (n *NIRController) processNextItem() bool {
 			n.queue.AddRateLimited(key)
 			return true
 		}
-		if nodeobj.Spec.Taints != nil {
-			n.logger.Infoln("[node rebooted phase] node still has taints, need to uncordon the node first:", nodename)
-			drainer := &drain.Helper{
-				Ctx:                 context.Background(),
-				Client:              &n.kubeclient,
-				Force:               true,
-				GracePeriodSeconds:  -1,
-				IgnoreAllDaemonSets: true,
-				Timeout:             5 * time.Minute,
-				Out:                 os.Stdout,
-				ErrOut:              os.Stderr,
-				DeleteEmptyDirData:  true,
-			}
 
-			if err := drain.RunCordonOrUncordon(drainer, nodeobj, false); err != nil {
-				n.logger.Errorln("[node rebooted phase] failed to uncordon node during rebooted operation", err)
-				n.queue.AddRateLimited(key)
-				return true
-			}
-			n.logger.Infoln("[node rebooted phase] successfully uncordoned node:", nodename)
-			if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Delete(context.TODO(), nodeIssueReport.Spec.NodeName, metav1.DeleteOptions{}); err != nil {
-				n.logger.Errorln("[node rebooted phase] faild to delete nodeIssueReport", nodeIssueReport.Name)
-				n.queue.AddRateLimited(key)
-				return true
-			} else {
-				n.logger.Infoln("[node rebooted phase] reboot Action done, deleted nodeIssueReport:", nodeIssueReport.Name)
-			}
+		// Check if node is Ready - only proceed with uncordon after the node has
+		// gone through NotReady (reboot actually happened) and come back to Ready.
+		// We verify this by checking that enough time has passed since the reboot was initiated.
+		rebootGracePeriod := 2 * time.Minute
+		if !nodeIssueReport.Spec.LastActionTime.IsZero() && time.Since(nodeIssueReport.Spec.LastActionTime.Time) < rebootGracePeriod {
+			n.logger.Infof("[node rebooted phase] waiting for reboot to take effect, %v since reboot, grace period %v", time.Since(nodeIssueReport.Spec.LastActionTime.Time).Round(time.Second), rebootGracePeriod)
+			n.queue.AddRateLimited(key)
 			return true
 		}
+
+		if !n.isNodeReady(nodeobj) {
+			n.logger.Infoln("[node rebooted phase] node is not ready yet, waiting for it to recover:", nodename)
+			n.queue.AddRateLimited(key)
+			return true
+		}
+
+		// Node is Ready and grace period has passed - safe to uncordon
+		n.logger.Infoln("[node rebooted phase] node is ready after reboot, uncordoning:", nodename)
+		drainer := &drain.Helper{
+			Ctx:                 context.Background(),
+			Client:              &n.kubeclient,
+			Force:               true,
+			GracePeriodSeconds:  -1,
+			IgnoreAllDaemonSets: true,
+			Timeout:             5 * time.Minute,
+			Out:                 os.Stdout,
+			ErrOut:              os.Stderr,
+			DeleteEmptyDirData:  true,
+		}
+
+		if err := drain.RunCordonOrUncordon(drainer, nodeobj, false); err != nil {
+			n.logger.Errorln("[node rebooted phase] failed to uncordon node during rebooted operation", err)
+			n.queue.AddRateLimited(key)
+			return true
+		}
+		n.logger.Infoln("[node rebooted phase] successfully uncordoned node:", nodename)
+
+		if err := n.awsOperator.SNSNotify(*nodeIssueReport, "reboot"); err != nil {
+			n.logger.Error("[node rebooted phase] failed to notify admin after reboot completed", err)
+		}
+
+		// Reboot is not a terminal action - keep NIR for escalation evaluation.
+		// Reset phase and action back to None so new events can accumulate scores again.
+		nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseNone
+		nodeIssueReport.Spec.Action = nodeIssueReportv1alpha1.None
+		nodeIssueReport.Spec.LastUpdateTime = metav1.Now()
+		if _, err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.TODO(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
+			n.logger.Errorln("[node rebooted phase] failed to reset NIR after reboot:", err)
+			n.queue.AddRateLimited(key)
+			return true
+		}
+		n.logger.Infoln("[node rebooted phase] reboot completed, NIR reset to PhaseNone for escalation evaluation:", nodeIssueReport.Name)
 		return true
 	}
 
@@ -479,7 +540,7 @@ func (n *NIRController) processNextItem() bool {
 		n.logger.Infoln("[node reboot phase] successfully rebooted node:", nodename)
 
 		// TODO: add function to notice user what happened, for investigating root cause
-		if err := n.awsOperator.SNSNotify(*nodeIssueReport, false); err != nil {
+		if err := n.awsOperator.SNSNotify(*nodeIssueReport, "reboot"); err != nil {
 			n.logger.Error("[node reboot phase] failed to notify admin when reboot node", err)
 		}
 		nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseRebooted
@@ -499,124 +560,192 @@ func (n *NIRController) processNextItem() bool {
 	}
 
 	if nodeIssueReport.Spec.Action != nodeIssueReportv1alpha1.None {
-		// TODO add logic to exclude node with label "npd-node-replace-disabled=true"
-		nodelabelmap := nodeobj.GetLabels()
-		if val, exists := nodelabelmap["npd-node-replace-enabled"]; !exists || val != "true" {
-			n.logger.Infoln("node don't has label npd-node-replace-enabled=true, user don't want to auto replace/reboot this node, just skip it:", nodename)
-			if err := n.awsOperator.SNSNotify(*nodeIssueReport, true); err != nil {
-				n.logger.Error("[node problem detected, skip node] failed to notify admin when node has npd-node-replace-enabled=true label", err)
-				n.queue.AddRateLimited(key)
-				return true
-			} else {
-				n.logger.Infoln("[node problem detected, skip node] successfully notified admin that node has npd-node-replace-enabled=true label:", nodename)
-			}
-			if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Delete(context.TODO(), nodeIssueReport.Name, metav1.DeleteOptions{}); err != nil {
-				n.logger.Errorln("[node problem detected, skip node] faild to delete nodeIssueReport", nodeIssueReport.Name, "with error:", err)
-				n.queue.AddRateLimited(key)
-				return true
-			} else {
-				n.logger.Infoln("[node problem detected, skip node] node is not labeled npd-node-replace-enabled=true, deleted nodeIssueReport:", nodeIssueReport.Name)
-			}
+		// Get the tolerance config for this node
+		toleranceEntry, err := n.getToleranceConfigForNode(nodeobj)
+		if err != nil {
+			n.logger.Errorln("failed to get tolerance config for node:", nodename, "with error:", err)
+			n.queue.AddRateLimited(key)
 			return true
-
-		} else {
-			n.logger.Infoln("node has label npd-node-replace-enabled=true, user allow auto replace/reboot this node, continue process:", nodename)
-			n.logger.Infoln("problem on node is not tolerated by user, do something")
-			if nodeIssueReport.Spec.Action == nodeIssueReportv1alpha1.Reboot && nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseNone {
-				//TODO aws reboot action logic
-				nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseReboot
-				if _, err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.TODO(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
-					n.logger.Errorln("[node none phase]  failed to change the phase to phase reboot, with error:", err)
-				}
-				return true
-			} else if nodeIssueReport.Spec.Action == nodeIssueReportv1alpha1.Replace && nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseNone {
-				//TODO aws replace node logic
-				nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseReplace
-				if _, err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.TODO(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
-					n.logger.Errorln("[node none phase]  failed to change the phase to phase replace, with error:", err)
-				}
-				return true
-			}
+		}
+		if toleranceEntry == nil {
+			n.logger.Infoln("no matching ToleranceConfig found for node:", nodename, ", skip action")
+			return true
 		}
 
+		if !toleranceEntry.AllowOperation {
+			n.logger.Infoln("ToleranceConfig.allowOperation is false for node:", nodename, ", only notify admin, skip action")
+			if err := n.awsOperator.SNSNotify(*nodeIssueReport, "not-allowed"); err != nil {
+				n.logger.Error("[node problem detected, skip node] failed to notify admin", err)
+				n.queue.AddRateLimited(key)
+				return true
+			}
+			// Reset NIR - don't delete, admin may want to investigate
+			nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseNone
+			nodeIssueReport.Spec.Action = nodeIssueReportv1alpha1.None
+			nodeIssueReport.Spec.LastUpdateTime = metav1.Now()
+			if _, err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.TODO(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
+				n.logger.Errorln("[node problem detected, skip node] failed to reset nodeIssueReport:", err)
+				n.queue.AddRateLimited(key)
+				return true
+			}
+			n.logger.Infoln("[node problem detected, skip node] notified admin and reset nodeIssueReport:", nodeIssueReport.Name)
+			return true
+		}
+
+		if nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseNone {
+			action := nodeIssueReportv1alpha1.Action(toleranceEntry.Action)
+			if nodeIssueReport.Spec.Escalated {
+				action = nodeIssueReportv1alpha1.Action(toleranceEntry.EscalateOperation)
+				n.logger.Infoln("[escalation] escalating action to:", action, "for node:", nodename)
+			}
+
+			// Dry-run check: if enabled, notify and reset without executing
+			if n.isDryRun(toleranceEntry, nodeIssueReport, string(action)) {
+				nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseNone
+				nodeIssueReport.Spec.Action = nodeIssueReportv1alpha1.None
+				nodeIssueReport.Spec.LastUpdateTime = metav1.Now()
+				if _, err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.TODO(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
+					n.logger.Errorln("[dry-run] failed to reset NIR:", err)
+				}
+				return true
+			}
+
+			// Concurrency check: if max concurrent actions is set and reached, requeue
+			if toleranceEntry.MaxConcurrentActions > 0 {
+				activeCount := n.countActiveActionsForEntry(toleranceEntry)
+				if activeCount >= toleranceEntry.MaxConcurrentActions {
+					n.logger.Infof("[concurrency] max concurrent actions reached for entry %s (%d/%d), requeueing node %s",
+						toleranceEntry.NodeLabel, activeCount, toleranceEntry.MaxConcurrentActions, nodename)
+					n.queue.AddRateLimited(key)
+					return true
+				}
+			}
+
+			switch action {
+			case nodeIssueReportv1alpha1.Reboot:
+				nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseReboot
+			case nodeIssueReportv1alpha1.Replace:
+				nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseReplace
+			case nodeIssueReportv1alpha1.Paging:
+				n.logger.Infoln("[paging] action is paging, notify admin only for node:", nodename)
+				reason := "paging"
+				if nodeIssueReport.Spec.Escalated {
+					reason = "escalate-paging"
+				}
+				if err := n.awsOperator.SNSNotify(*nodeIssueReport, reason); err != nil {
+					n.logger.Error("[paging] failed to notify admin", err)
+					n.queue.AddRateLimited(key)
+					return true
+				}
+				if nodeIssueReport.Spec.Escalated {
+					// Escalated paging is a terminal action - delete NIR
+					n.logger.Infoln("[paging] escalated paging completed, deleting NIR for node:", nodename)
+					if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Delete(context.TODO(), nodeIssueReport.Name, metav1.DeleteOptions{}); err != nil {
+						n.logger.Errorln("[paging] failed to delete nodeIssueReport after escalated paging:", err)
+						n.queue.AddRateLimited(key)
+					}
+					return true
+				}
+				// Non-escalated paging: reset NIR for escalation evaluation
+				nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseNone
+				nodeIssueReport.Spec.Action = nodeIssueReportv1alpha1.None
+				nodeIssueReport.Spec.LastUpdateTime = metav1.Now()
+				if _, err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.TODO(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
+					n.logger.Errorln("[paging] failed to reset NIR after paging:", err)
+				}
+				return true
+			default:
+				n.logger.Warnln("unknown action in ToleranceConfig:", action, "for node:", nodename)
+				return true
+			}
+			nodeIssueReport.Spec.LastUpdateTime = metav1.Now()
+			if _, err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.TODO(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
+				n.logger.Errorln("[node none phase] failed to change phase with error:", err)
+			}
+			return true
+		}
+		return true
 	}
 
-	// travesal all node problems
-	// thinking replace will handle more unbearable issues, if NIR is tagged with replace ation , instanstly perform , is tagged with reboot action, continue to travesal problems on the node
-	for problemname, problem := range problems {
-		// if n.toleranceConfig == nil {
-		// 	n.logger.Errorln("tolerance config is nil, cannot check if problem is tolerated, just return")
-		// }
-		// get the tolerance config for specific senario
-		n.logger.Infoln("travesal all node problems, current problem", problemname)
+	// Score threshold check - scores are accumulated by EventController
+	toleranceEntry, err := n.getToleranceConfigForNode(nodeobj)
+	if err != nil {
+		n.logger.Errorln("failed to get tolerance config for node:", nodename, "with error:", err)
+		return true
+	}
+	if toleranceEntry == nil {
+		n.logger.Infoln("no matching ToleranceConfig found for node:", nodename, ", skip problem evaluation")
+		return true
+	}
 
-		// add logic to handle error when toleranceConfig is nil
-		tolerancecount, exist, err := n.getTolerancecount(problemname)
-		if err != nil {
-			n.logger.Errorln("failed to get tolerance count for problem:", problemname, "with error:", err)
-			return true
-		}
-		// tolerancecount, exist := n.toleranceConfig.ToleranceCollection[problemname]
-		if !exist {
-			n.logger.Infoln("no tolerance config for problem:", problemname, "skip it")
-			continue
-		}
-
-		timewindows := time.Duration(tolerancecount.TimeWindowInMinutes) * time.Minute
-		count := 0
-		for _, messagerecord := range problem.Message {
-			if time.Since(messagerecord.Timestamp.Time) <= timewindows {
-				count++
+	if nodeIssueReport.Spec.ScoreInBucket >= toleranceEntry.BucketSize {
+		// Check if this is an escalation: bucket overflowed again within cooldown window after a previous action
+		isEscalation := false
+		if !nodeIssueReport.Spec.LastActionTime.IsZero() && toleranceEntry.CooldownTimeInMinutes > 0 {
+			cooldown := time.Duration(toleranceEntry.CooldownTimeInMinutes) * time.Minute
+			if time.Since(nodeIssueReport.Spec.LastActionTime.Time) <= cooldown {
+				isEscalation = true
 			}
 		}
-		n.logger.Info("within time window, deletected problem count is :", count)
 
-		if tolerancecount.Times <= int32(count) {
-			//nodeIssueReport.Spec.Action = true
-			toleranceAction := tolerancecount.Action
-			if toleranceAction == config.ActionReboot {
-				nodeIssueReport.Spec.Action = nodeIssueReportv1alpha1.Reboot
-				// nodeIssueReport.Spec.Phase = NodeissuereporterV1alpha1.pha
-				if result, err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.Background(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
-					n.logger.Errorln("failed to update NodeIssueReport:", err)
-				} else {
-					if resultjson, err := json.Marshal(result); err != nil {
-						n.logger.Errorln("failed to Marshal Action Update result", err)
-					} else {
-						n.logger.Debugln("Action Update result", string(resultjson))
-					}
-				}
-				return true
+		if isEscalation {
+			n.logger.Infof("[escalation] score bucket overflow within cooldown for node %s: %d / %d, escalating to: %s",
+				nodename, nodeIssueReport.Spec.ScoreInBucket, toleranceEntry.BucketSize, toleranceEntry.EscalateOperation)
+			nodeIssueReport.Spec.Action = nodeIssueReportv1alpha1.Action(toleranceEntry.EscalateOperation)
+			nodeIssueReport.Spec.Escalated = true
+			metrics.ActionsTotal.WithLabelValues(nodename, string(toleranceEntry.EscalateOperation), "true").Inc()
+		} else {
+			n.logger.Infof("score bucket overflow for node %s: %d / %d, triggering action: %s",
+				nodename, nodeIssueReport.Spec.ScoreInBucket, toleranceEntry.BucketSize, toleranceEntry.Action)
+			nodeIssueReport.Spec.Action = nodeIssueReportv1alpha1.Action(toleranceEntry.Action)
+			metrics.ActionsTotal.WithLabelValues(nodename, toleranceEntry.Action, "false").Inc()
+		}
 
-			} else if toleranceAction == config.ActionReplace {
-				nodeIssueReport.Spec.Action = nodeIssueReportv1alpha1.Replace
-				// n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.Background(), nodeIssueReport, metav1.UpdateOptions{})
-				if result, err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.Background(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
-					n.logger.Errorln("failed to update NodeIssueReport:", err)
-				} else {
-					if resultjson, err := json.Marshal(result); err != nil {
-						n.logger.Errorln("failed to Marshal Action Update result", err)
-					} else {
-						n.logger.Debugln("Action Update result", string(resultjson))
-					}
-				}
-				return true
+		nodeIssueReport.Spec.ScoreInBucket = 0
+		nodeIssueReport.Spec.LastActionTime = metav1.Now()
+		nodeIssueReport.Spec.LastUpdateTime = metav1.Now()
 
-			}
-
+		// Reset score gauge
+		nodegroup := "unknown"
+		if ng, exists := nodeobj.GetLabels()["eks.amazonaws.com/nodegroup"]; exists {
+			nodegroup = ng
+		}
+		metrics.ScoreBucketCurrent.WithLabelValues(nodename, nodegroup).Set(0)
+		if _, err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.Background(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
+			n.logger.Errorln("failed to update NodeIssueReport after bucket overflow:", err)
 		}
 	}
 
 	return true
 }
 
-func (n *NIRController) getTolerancecount(problemname string) (config.Tolerance, bool, error) {
-	if n.toleranceConfig == nil {
-		n.logger.Errorln("tolerance config is nil, cannot get tolerance count for problem:", problemname)
-		return config.Tolerance{}, false, plainerr.New("tolerance config is nil")
+// getToleranceConfigForNode finds the matching ToleranceConfigEntry for a given node by checking node labels.
+func (n *NIRController) getToleranceConfigForNode(nodeobj *v1.Node) (*nodeIssueReportv1alpha1.ToleranceConfigEntry, error) {
+	toleranceConfigs, err := n.toleranceConfigLister.List(labels.Everything())
+	if err != nil {
+		return nil, err
 	}
-	tolerancecount, exist := n.toleranceConfig.ToleranceCollection[problemname]
-	return tolerancecount, exist, nil
+	if len(toleranceConfigs) == 0 {
+		n.logger.Warnln("no ToleranceConfig resources found in cluster")
+		return nil, nil
+	}
+
+	nodelabels := nodeobj.GetLabels()
+	for _, tc := range toleranceConfigs {
+		for i := range tc.Spec.Configs {
+			entry := &tc.Spec.Configs[i]
+			// nodeLabel format: "key=value"
+			parts := strings.SplitN(entry.NodeLabel, "=", 2)
+			if len(parts) != 2 {
+				n.logger.Warnln("invalid nodeLabel format in ToleranceConfig, expected key=value, got:", entry.NodeLabel)
+				continue
+			}
+			if val, exists := nodelabels[parts[0]]; exists && val == parts[1] {
+				return entry, nil
+			}
+		}
+	}
+	return nil, nil
 }
 
 func (n *NIRController) checkIfNewnodeExpected(nodeobj *v1.Node, newnodeobj *v1.Node) bool {
@@ -647,32 +776,67 @@ func (n *NIRController) worker() {
 
 func (n *NIRController) Run(stopch <-chan struct{}) {
 	n.logger.Println("Worker is processing events...")
-	//tolerance, err := config.LoadConfiguration()
-
-	//if err != nil {
-	//	n.logger.Fatal("failed to load tolerance configuration", err)
-	//}
 
 	for i := 0; i < workercount; i++ {
 		go wait.Until(n.worker, time.Second, stopch)
 	}
 
+	// Periodic cleanup of expired NIR resources whose cooldown has passed
+	go wait.Until(n.cleanupExpiredNIRs, 1*time.Minute, stopch)
+
 	<-stopch
-	// TODO delete all the NodeIssueReport resources
 	n.logger.Infoln("Shutting down NIRController")
 	close(newNodeChan)
-
 }
 
-func NewNIRController(nodeIssueReportInformer nodeIssueReport.NodeIssueReportInformer, nodeIssueReportClient nirclient.Clientset, kubeclient kubernetes.Clientset, awsOperator awspkg.AwsOperator, nodeInformer informercorev1.NodeInformer) *NIRController {
-	tolerancecoll, err := config.LoadConfiguration()
+// cleanupExpiredNIRs scans all NodeIssueReport resources and deletes those
+// whose cooldown has expired with no pending action (i.e. no escalation triggered).
+func (n *NIRController) cleanupExpiredNIRs() {
+	nirList, err := n.nodeIssueReportLister.List(labels.Everything())
 	if err != nil {
-		log.Errorf("[NIR controller] failed to load tolerance configuration: %v, will continue with nil tolerance config", err)
+		n.logger.Errorln("[lifecycle cleanup] failed to list NodeIssueReport resources:", err)
+		return
 	}
+
+	// Update active NIR gauge
+	metrics.NIRActive.Set(float64(len(nirList)))
+
+	for _, nir := range nirList {
+		if nir.Spec.LastActionTime.IsZero() ||
+			nir.Spec.Action != nodeIssueReportv1alpha1.None ||
+			nir.Spec.Phase != nodeIssueReportv1alpha1.PhaseNone {
+			continue
+		}
+
+		nodeobj, err := n.nodelister.Get(nir.Spec.NodeName)
+		if err != nil {
+			continue
+		}
+		toleranceEntry, err := n.getToleranceConfigForNode(nodeobj)
+		if err != nil || toleranceEntry == nil || toleranceEntry.CooldownTimeInMinutes <= 0 {
+			continue
+		}
+
+		cooldown := time.Duration(toleranceEntry.CooldownTimeInMinutes) * time.Minute
+		if time.Since(nir.Spec.LastActionTime.Time) > cooldown {
+			n.logger.Infof("[lifecycle cleanup] cooldown expired for node %s (last action %v ago), cleaning up NIR",
+				nir.Spec.NodeName, time.Since(nir.Spec.LastActionTime.Time).Round(time.Second))
+			if err := n.awsOperator.SNSNotify(*nir, "cooldown-expired"); err != nil {
+				n.logger.Error("[lifecycle cleanup] failed to send final status notification:", err)
+			}
+			if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(nir.Namespace).Delete(context.TODO(), nir.Name, metav1.DeleteOptions{}); err != nil {
+				n.logger.Errorln("[lifecycle cleanup] failed to delete expired NIR:", nir.Name, err)
+			}
+		}
+	}
+}
+
+func NewNIRController(nodeIssueReportInformer nodeIssueReport.NodeIssueReportInformer, toleranceConfigInformer nodeIssueReport.ToleranceConfigInformer, nodeIssueReportClient nirclient.Clientset, kubeclient kubernetes.Clientset, awsOperator awspkg.AwsOperator, nodeInformer informercorev1.NodeInformer) *NIRController {
 	n := &NIRController{
 		nodeIssueReportInformer: nodeIssueReportInformer,
+		toleranceConfigInformer: toleranceConfigInformer,
+		toleranceConfigLister:   toleranceConfigInformer.Lister(),
 		queue:                   workqueue.NewTypedRateLimitingQueue(workqueue.NewTypedItemExponentialFailureRateLimiter[string](1*time.Second, 30*time.Second)),
-		toleranceConfig:         tolerancecoll,
 		nodeIssueReportLister:   nodeIssueReportInformer.Lister(),
 		nodeIssueReportClient:   nodeIssueReportClient,
 		kubeclient:              kubeclient,

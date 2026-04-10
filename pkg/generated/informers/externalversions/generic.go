@@ -55,6 +55,8 @@ func (f *sharedInformerFactory) ForResource(resource schema.GroupVersionResource
 	// Group=nodeissuereporter.xingzhan.io, Version=v1alpha1
 	case v1alpha1.SchemeGroupVersion.WithResource("nodeissuereports"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Nodeissuereporter().V1alpha1().NodeIssueReports().Informer()}, nil
+	case v1alpha1.SchemeGroupVersion.WithResource("toleranceconfigs"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Nodeissuereporter().V1alpha1().ToleranceConfigs().Informer()}, nil
 
 	}
 
