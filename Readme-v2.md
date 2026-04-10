@@ -8,6 +8,8 @@ npd-node-replace 是一个面向 Amazon EKS 中国区集群的节点自动修复
 
 代码结构详解：https://deepwiki.com/normalzzz/npd-node-replace
 
+v1 与 v2 版本详细对比请参见 [v1 vs v2 对比文档](./docs/v1-vs-v2.md)
+
 ## v2 版本主要变更
 
 相比 v1 版本，v2 进行了以下重大改进：
@@ -29,6 +31,10 @@ npd-node-replace 是一个面向 Amazon EKS 中国区集群的节点自动修复
 ## 核心功能
 
 1. 侦听来自 NPD 的节点问题事件（OOMKilling、KernelOops、ReadonlyFilesystem、NTPProblem 等）
+   - 支持的事件源：kernel-monitor、readonly-monitor、network-custom-plugin-monitor、iptables-mode-monitor、health-checker、docker-monitor、disk-monitor、ntp-custom-plugin-monitor、abrt-adaptor
+   - 同时支持通过 ManagedFields 中包含 `node-problem-detector` 的事件
+   - 完整的 NPD 事件类型列表参见 [NPD 事件汇总](./npd-events-summary.md)
+   - NPD 官方事件配置参考 [Node Problem Detector config](https://github.com/kubernetes/node-problem-detector/tree/master/config)
 2. 将事件记录在 NodeIssueReport 自定义资源中，并基于 ToleranceConfig 配置的积分桶进行分数累加
 3. 积分桶打满时，根据配置执行 reboot、replace 或 paging 操作
 4. 支持 escalation：首次操作后 cooldown 窗口内再次打满积分桶，自动升级操作
@@ -52,6 +58,24 @@ npd-node-replace 是一个面向 Amazon EKS 中国区集群的节点自动修复
 ## 整体架构
 
 ![structure](./npd-node-replace-workflow.png)
+
+## 支持的 NPD 事件类型
+
+组件侦听以下 NPD 事件源上报的事件，可在 ToleranceConfig 的 `eventScores` 中为任意事件配置分数：
+
+| 事件源 | 常见事件 (Reason) | 说明 |
+|--------|------------------|------|
+| kernel-monitor | OOMKilling, TaskHung, KernelOops, Ext4Error, IOError, DockerHung, MemoryReadError, XfsHasShutdown | 内核日志 `/dev/kmsg` 监控 |
+| readonly-monitor | FilesystemIsReadOnly | 只读文件系统检测 |
+| docker-monitor | CorruptDockerImage, DockerContainerStartupFailure, CorruptDockerOverlay2 | Docker 运行时问题 |
+| disk-monitor | DiskBadBlock | 磁盘坏块检测 |
+| network-custom-plugin-monitor | ConntrackFull, DNSUnreachable | 网络连接问题 |
+| iptables-mode-monitor | IPTablesVersionsMismatch | iptables 版本不一致 |
+| ntp-custom-plugin-monitor | NTPIsDown, NTPProblem | NTP 时间同步问题 |
+| health-checker | KubeletUnhealthy, ContainerdUnhealthy, DockerUnhealthy | 组件健康检查 |
+| abrt-adaptor | CCPPCrash, UncaughtException, KernelOops, VMcore | ABRT 崩溃报告 |
+
+完整事件列表参见 [NPD 事件汇总](./npd-events-summary.md) | NPD 官方配置参考 [Node Problem Detector config](https://github.com/kubernetes/node-problem-detector/tree/master/config)
 
 ## 自定义资源
 
@@ -93,6 +117,7 @@ spec:
       cooldownTimeInMinutes: 30
       eventWindowInMinutes: 60
       escalateOperation: replace
+      maxConcurrentActions: 1
       eventScores:
         - eventName: OOMKilling
           score: 30
@@ -126,6 +151,7 @@ spec:
       bucketSize: 50
       action: paging
       allowOperation: false
+      dryRun: true
       eventWindowInMinutes: 30
       eventScores:
         - eventName: OOMKilling
@@ -376,6 +402,8 @@ Prometheus scrape 配置示例：
 | allowOperation=false | `[npd-node-replace] Node issues detected - auto-action disabled, notify only` |
 | Cooldown 过期清理 | `[npd-node-replace] Node issue report cleanup - cooldown expired, no escalation triggered` |
 | Escalation paging | `[npd-node-replace] ESCALATION - repeated issues after action, admin notification` |
+| 并发限制等待 | `[npd-node-replace] Action DELAYED - max concurrent actions reached, waiting for capacity` |
+| Dry-run | `[npd-node-replace] DRY-RUN: would execute {action}, but dry-run mode is enabled` |
 
 ## 测试
 
