@@ -3,7 +3,7 @@ kubernetesClusterDomain: cluster.local
 npdNodeReplace:
   replicas: 2
   image:
-    repository: zxxxxzz/npd-node-replace
+    repository: zxxxxzz/npd-node-replace-v2
     tag: latest
   imagePullPolicy: Always
   env:
