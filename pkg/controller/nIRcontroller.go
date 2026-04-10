@@ -455,8 +455,13 @@ func (n *NIRController) processNextItem() bool {
 		// gone through NotReady (reboot actually happened) and come back to Ready.
 		// We verify this by checking that enough time has passed since the reboot was initiated.
 		rebootGracePeriod := 2 * time.Minute
-		if !nodeIssueReport.Spec.LastActionTime.IsZero() && time.Since(nodeIssueReport.Spec.LastActionTime.Time) < rebootGracePeriod {
-			n.logger.Infof("[node rebooted phase] waiting for reboot to take effect, %v since reboot, grace period %v", time.Since(nodeIssueReport.Spec.LastActionTime.Time).Round(time.Second), rebootGracePeriod)
+		rebootTime := nodeIssueReport.Spec.LastActionTime.Time
+		if nodeIssueReport.Spec.LastActionTime.IsZero() {
+			// NodeController-triggered reboot: LastActionTime not set, use LastUpdateTime as fallback
+			rebootTime = nodeIssueReport.Spec.LastUpdateTime.Time
+		}
+		if !rebootTime.IsZero() && time.Since(rebootTime) < rebootGracePeriod {
+			n.logger.Infof("[node rebooted phase] waiting for reboot to take effect, %v since reboot, grace period %v", time.Since(rebootTime).Round(time.Second), rebootGracePeriod)
 			n.queue.AddRateLimited(key)
 			return true
 		}
@@ -544,6 +549,7 @@ func (n *NIRController) processNextItem() bool {
 			n.logger.Error("[node reboot phase] failed to notify admin when reboot node", err)
 		}
 		nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseRebooted
+		nodeIssueReport.Spec.LastUpdateTime = metav1.Now()
 
 		if _, err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.TODO(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
 			n.logger.Errorln("[node reboot phase] faile to change phase to rebooted with error:", err)
@@ -560,26 +566,22 @@ func (n *NIRController) processNextItem() bool {
 	}
 
 	if nodeIssueReport.Spec.Action != nodeIssueReportv1alpha1.None {
-		// Get the tolerance config for this node
+		// Get the tolerance config for this node (may be nil for NodeController-triggered actions)
 		toleranceEntry, err := n.getToleranceConfigForNode(nodeobj)
 		if err != nil {
 			n.logger.Errorln("failed to get tolerance config for node:", nodename, "with error:", err)
 			n.queue.AddRateLimited(key)
 			return true
 		}
-		if toleranceEntry == nil {
-			n.logger.Infoln("no matching ToleranceConfig found for node:", nodename, ", skip action")
-			return true
-		}
 
-		if !toleranceEntry.AllowOperation {
+		// Check allowOperation (only if toleranceEntry exists)
+		if toleranceEntry != nil && !toleranceEntry.AllowOperation {
 			n.logger.Infoln("ToleranceConfig.allowOperation is false for node:", nodename, ", only notify admin, skip action")
 			if err := n.awsOperator.SNSNotify(*nodeIssueReport, "not-allowed"); err != nil {
 				n.logger.Error("[node problem detected, skip node] failed to notify admin", err)
 				n.queue.AddRateLimited(key)
 				return true
 			}
-			// Reset NIR - don't delete, admin may want to investigate
 			nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseNone
 			nodeIssueReport.Spec.Action = nodeIssueReportv1alpha1.None
 			nodeIssueReport.Spec.LastUpdateTime = metav1.Now()
@@ -593,14 +595,17 @@ func (n *NIRController) processNextItem() bool {
 		}
 
 		if nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseNone {
-			action := nodeIssueReportv1alpha1.Action(toleranceEntry.Action)
-			if nodeIssueReport.Spec.Escalated {
+			// Use the NIR's own Action value (set by NodeController or score bucket overflow).
+			// Only override with ToleranceConfig when escalated.
+			action := nodeIssueReport.Spec.Action
+			if nodeIssueReport.Spec.Escalated && toleranceEntry != nil {
 				action = nodeIssueReportv1alpha1.Action(toleranceEntry.EscalateOperation)
 				n.logger.Infoln("[escalation] escalating action to:", action, "for node:", nodename)
 			}
+			n.logger.Infof("[action dispatch] node %s, action=%s, escalated=%v", nodename, action, nodeIssueReport.Spec.Escalated)
 
-			// Dry-run check: if enabled, notify and reset without executing
-			if n.isDryRun(toleranceEntry, nodeIssueReport, string(action)) {
+			// Dry-run check (only if toleranceEntry exists)
+			if toleranceEntry != nil && n.isDryRun(toleranceEntry, nodeIssueReport, string(action)) {
 				nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseNone
 				nodeIssueReport.Spec.Action = nodeIssueReportv1alpha1.None
 				nodeIssueReport.Spec.LastUpdateTime = metav1.Now()
@@ -610,8 +615,8 @@ func (n *NIRController) processNextItem() bool {
 				return true
 			}
 
-			// Concurrency check: if max concurrent actions is set and reached, requeue
-			if toleranceEntry.MaxConcurrentActions > 0 {
+			// Concurrency check (only if toleranceEntry exists)
+			if toleranceEntry != nil && toleranceEntry.MaxConcurrentActions > 0 {
 				activeCount := n.countActiveActionsForEntry(toleranceEntry)
 				if activeCount >= toleranceEntry.MaxConcurrentActions {
 					n.logger.Infof("[concurrency] max concurrent actions reached for entry %s (%d/%d), requeueing node %s",

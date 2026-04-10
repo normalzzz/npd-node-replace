@@ -227,7 +227,13 @@ func (c *NodeController) processNextItemDelayqueue() bool {
 			c.requeueDelayAfter(key, err)
 			return true
 		}
-		// notice here
+
+		// Don't override action if NIR is already in an active phase (e.g. reboot in progress)
+		if nodeissuereport.Spec.Phase != nodeIssueReportv1alpha1.PhaseNone {
+			c.logger.Infof("Node %s NIR is already in active phase %s, skip setting replace action", nodeobj.Name, nodeissuereport.Spec.Phase)
+			return true
+		}
+
 		if status, _ := c.checknodestatus(nodeobj); status == corev1.ConditionUnknown {
 			c.logger.Infoln("Node", nodeobj.Name, "status is unknown, set force replace action directly")
 			nodeissuereport.Spec.NodeStatus = nodeIssueReportv1alpha1.NodeUnknownStatus

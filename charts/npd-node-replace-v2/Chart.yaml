@@ -2,5 +2,5 @@ apiVersion: v2
 name: npd-node-replace-v2
 description: Node auto-repair for Amazon EKS with score-bucket tolerance, escalation, and per-node-type policies
 type: application
-version: 2.0.0
-appVersion: "2.0.0"
+version: 2.0.1
+appVersion: "2.0.1"
