@@ -8,6 +8,7 @@ import (
 	"time"
 
 	nirclient "xingzhan-node-autoreplace/pkg/generated/clientset/versioned"
+	"xingzhan-node-autoreplace/pkg/metrics"
 
 	log "github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
@@ -235,6 +236,17 @@ func (c *EventController) updateNodeIssueReport(nodeissuereport *nodeIssueReport
 		nodeissuereport.Spec.ScoreInBucket = c.recalcScoreInBucket(nodeissuereport, entry)
 	}
 	nodeissuereport.Spec.LastUpdateTime = metav1.Now()
+
+	// Update score bucket metric
+	nodeobj, nerr := c.NodeLister.Get(nodeissuereport.Spec.NodeName)
+	nodegroup := "unknown"
+	if nerr == nil {
+		if ng, exists := nodeobj.GetLabels()["eks.amazonaws.com/nodegroup"]; exists {
+			nodegroup = ng
+		}
+	}
+	metrics.ScoreBucketCurrent.WithLabelValues(nodeissuereport.Spec.NodeName, nodegroup).Set(float64(nodeissuereport.Spec.ScoreInBucket))
+
 	_, err := c.nirclient.NodeissuereporterV1alpha1().NodeIssueReports(nodeissuereport.Namespace).Update(context.Background(), nodeissuereport, metav1.UpdateOptions{})
 	if err != nil {
 		c.logger.Errorln("failed to update node issue report", err)
@@ -288,6 +300,8 @@ func (c *EventController) processNextItem() bool {
 			return true
 		}
 		c.logger.Infoln("created node Issue Report resource for node,", nodename)
+		metrics.EventsTotal.WithLabelValues(nodename, event.Reason).Inc()
+		metrics.NIRActive.Inc()
 		return true
 	}
 
@@ -297,6 +311,7 @@ func (c *EventController) processNextItem() bool {
 		c.requeue(key)
 		return true
 	}
+	metrics.EventsTotal.WithLabelValues(nodename, event.Reason).Inc()
 
 	return true
 

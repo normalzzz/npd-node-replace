@@ -20,6 +20,7 @@ import (
 	nirclient "xingzhan-node-autoreplace/pkg/generated/clientset/versioned"
 	nodeissuereportinformer "xingzhan-node-autoreplace/pkg/generated/informers/externalversions"
 	le "xingzhan-node-autoreplace/pkg/leaderelection"
+	"xingzhan-node-autoreplace/pkg/metrics"
 	"xingzhan-node-autoreplace/pkg/signal"
 )
 
@@ -62,6 +63,13 @@ func main() {
 	if leaseNamespace == "" {
 		leaseNamespace = "default"
 	}
+
+	// Start metrics server (runs regardless of leader election)
+	metricsAddr := os.Getenv("METRICS_ADDR")
+	if metricsAddr == "" {
+		metricsAddr = ":9090"
+	}
+	go metrics.StartMetricsServer(metricsAddr)
 
 	stopCh := signal.SetupSignalHandler()
 	ctx, cancel := context.WithCancel(context.Background())

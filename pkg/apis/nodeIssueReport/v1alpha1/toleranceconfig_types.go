@@ -69,6 +69,16 @@ type ToleranceConfigEntry struct {
 	// +optional
 	EscalateOperation EscalationAction `json:"escalateOperation,omitempty"`
 
+	// DryRun when true, runs all evaluation logic but does not execute actual reboot/replace operations.
+	// Only sends SNS notifications indicating what would have happened.
+	// +optional
+	DryRun bool `json:"dryRun,omitempty"`
+
+	// MaxConcurrentActions limits the number of nodes matching this entry that can be
+	// undergoing reboot/replace simultaneously. 0 means no limit.
+	// +optional
+	MaxConcurrentActions int32 `json:"maxConcurrentActions,omitempty"`
+
 	// EventScores defines the score for each event type.
 	EventScores []EventScore `json:"eventScores"`
 }
@@ -93,8 +103,9 @@ type ToleranceConfigList struct {
 }
 
 type EscalationAction string
+
 const (
 	replace EscalationAction = "replace"
-	paging EscalationAction = "paging"
-	none EscalationAction = "none"
+	paging  EscalationAction = "paging"
+	none    EscalationAction = "none"
 )

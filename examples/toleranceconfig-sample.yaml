@@ -12,6 +12,7 @@ spec:
       cooldownTimeInMinutes: 30
       eventWindowInMinutes: 60
       escalateOperation: replace
+      maxConcurrentActions: 1
       eventScores:
         - eventName: OOMKilling
           score: 30
@@ -30,6 +31,7 @@ spec:
       cooldownTimeInMinutes: 20
       eventWindowInMinutes: 45
       escalateOperation: paging
+      maxConcurrentActions: 2
       eventScores:
         - eventName: OOMKilling
           score: 20
@@ -45,6 +47,7 @@ spec:
       bucketSize: 50
       action: paging
       allowOperation: false
+      dryRun: true
       eventWindowInMinutes: 30
       eventScores:
         - eventName: OOMKilling

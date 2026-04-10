@@ -3,12 +3,14 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"time"
 	awspkg "xingzhan-node-autoreplace/pkg/aws"
 	nirclient "xingzhan-node-autoreplace/pkg/generated/clientset/versioned"
 	nodeIssueReport "xingzhan-node-autoreplace/pkg/generated/informers/externalversions/nodeIssueReport/v1alpha1"
+	"xingzhan-node-autoreplace/pkg/metrics"
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/labels"
@@ -209,6 +211,47 @@ func (n *NIRController) drainNode(nodeobj v1.Node, forcely bool) error {
 	}
 	return nil
 
+}
+
+// countActiveActionsForEntry counts how many NIRs matching the given tolerance entry
+// are currently in an active phase (not PhaseNone).
+func (n *NIRController) countActiveActionsForEntry(entry *nodeIssueReportv1alpha1.ToleranceConfigEntry) int32 {
+	nirList, err := n.nodeIssueReportLister.List(labels.Everything())
+	if err != nil {
+		return 0
+	}
+	parts := strings.SplitN(entry.NodeLabel, "=", 2)
+	if len(parts) != 2 {
+		return 0
+	}
+	var count int32
+	for _, nir := range nirList {
+		if nir.Spec.Phase == nodeIssueReportv1alpha1.PhaseNone {
+			continue
+		}
+		nodeobj, err := n.nodelister.Get(nir.Spec.NodeName)
+		if err != nil {
+			continue
+		}
+		if val, exists := nodeobj.GetLabels()[parts[0]]; exists && val == parts[1] {
+			count++
+		}
+	}
+	return count
+}
+
+// isDryRun checks if the tolerance entry has dry-run mode enabled.
+// In dry-run mode, sends an SNS notification about what would happen but takes no action.
+func (n *NIRController) isDryRun(entry *nodeIssueReportv1alpha1.ToleranceConfigEntry, nir *nodeIssueReportv1alpha1.NodeIssueReport, action string) bool {
+	if !entry.DryRun {
+		return false
+	}
+	reason := fmt.Sprintf("dry-run-%s", action)
+	n.logger.Infof("[dry-run] would execute %s on node %s, but dry-run is enabled", action, nir.Spec.NodeName)
+	if err := n.awsOperator.SNSNotify(*nir, reason); err != nil {
+		n.logger.Errorf("[dry-run] failed to send dry-run notification: %v", err)
+	}
+	return true
 }
 
 func (n *NIRController) processNextItem() bool {
@@ -555,6 +598,29 @@ func (n *NIRController) processNextItem() bool {
 				action = nodeIssueReportv1alpha1.Action(toleranceEntry.EscalateOperation)
 				n.logger.Infoln("[escalation] escalating action to:", action, "for node:", nodename)
 			}
+
+			// Dry-run check: if enabled, notify and reset without executing
+			if n.isDryRun(toleranceEntry, nodeIssueReport, string(action)) {
+				nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseNone
+				nodeIssueReport.Spec.Action = nodeIssueReportv1alpha1.None
+				nodeIssueReport.Spec.LastUpdateTime = metav1.Now()
+				if _, err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.TODO(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
+					n.logger.Errorln("[dry-run] failed to reset NIR:", err)
+				}
+				return true
+			}
+
+			// Concurrency check: if max concurrent actions is set and reached, requeue
+			if toleranceEntry.MaxConcurrentActions > 0 {
+				activeCount := n.countActiveActionsForEntry(toleranceEntry)
+				if activeCount >= toleranceEntry.MaxConcurrentActions {
+					n.logger.Infof("[concurrency] max concurrent actions reached for entry %s (%d/%d), requeueing node %s",
+						toleranceEntry.NodeLabel, activeCount, toleranceEntry.MaxConcurrentActions, nodename)
+					n.queue.AddRateLimited(key)
+					return true
+				}
+			}
+
 			switch action {
 			case nodeIssueReportv1alpha1.Reboot:
 				nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseReboot
@@ -627,15 +693,24 @@ func (n *NIRController) processNextItem() bool {
 				nodename, nodeIssueReport.Spec.ScoreInBucket, toleranceEntry.BucketSize, toleranceEntry.EscalateOperation)
 			nodeIssueReport.Spec.Action = nodeIssueReportv1alpha1.Action(toleranceEntry.EscalateOperation)
 			nodeIssueReport.Spec.Escalated = true
+			metrics.ActionsTotal.WithLabelValues(nodename, string(toleranceEntry.EscalateOperation), "true").Inc()
 		} else {
 			n.logger.Infof("score bucket overflow for node %s: %d / %d, triggering action: %s",
 				nodename, nodeIssueReport.Spec.ScoreInBucket, toleranceEntry.BucketSize, toleranceEntry.Action)
 			nodeIssueReport.Spec.Action = nodeIssueReportv1alpha1.Action(toleranceEntry.Action)
+			metrics.ActionsTotal.WithLabelValues(nodename, toleranceEntry.Action, "false").Inc()
 		}
 
 		nodeIssueReport.Spec.ScoreInBucket = 0
 		nodeIssueReport.Spec.LastActionTime = metav1.Now()
 		nodeIssueReport.Spec.LastUpdateTime = metav1.Now()
+
+		// Reset score gauge
+		nodegroup := "unknown"
+		if ng, exists := nodeobj.GetLabels()["eks.amazonaws.com/nodegroup"]; exists {
+			nodegroup = ng
+		}
+		metrics.ScoreBucketCurrent.WithLabelValues(nodename, nodegroup).Set(0)
 		if _, err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.Background(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
 			n.logger.Errorln("failed to update NodeIssueReport after bucket overflow:", err)
 		}
@@ -722,6 +797,10 @@ func (n *NIRController) cleanupExpiredNIRs() {
 		n.logger.Errorln("[lifecycle cleanup] failed to list NodeIssueReport resources:", err)
 		return
 	}
+
+	// Update active NIR gauge
+	metrics.NIRActive.Set(float64(len(nirList)))
+
 	for _, nir := range nirList {
 		if nir.Spec.LastActionTime.IsZero() ||
 			nir.Spec.Action != nodeIssueReportv1alpha1.None ||

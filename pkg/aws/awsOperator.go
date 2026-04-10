@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -124,8 +125,15 @@ func (a *AwsOperator) SNSNotify(nodeissuereport nodeIssueReportv1alpha1.NodeIssu
 		snsSubject = "[npd-node-replace] Node issue report cleanup - cooldown expired, no escalation triggered"
 	case "escalate-paging":
 		snsSubject = "[npd-node-replace] ESCALATION - repeated issues after action, admin notification"
+	case "concurrency-blocked":
+		snsSubject = "[npd-node-replace] Action DELAYED - max concurrent actions reached, waiting for capacity"
 	default:
-		snsSubject = fmt.Sprintf("[npd-node-replace] Node issue notification (%s)", reason)
+		if strings.HasPrefix(reason, "dry-run-") {
+			action := strings.TrimPrefix(reason, "dry-run-")
+			snsSubject = fmt.Sprintf("[npd-node-replace] DRY-RUN: would execute %s, but dry-run mode is enabled", action)
+		} else {
+			snsSubject = fmt.Sprintf("[npd-node-replace] Node issue notification (%s)", reason)
+		}
 	}
 
 	nodeissuereportmessage := fmt.Sprintf(`

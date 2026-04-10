@@ -45,4 +45,8 @@ spec:
           value: {{ quote .Values.npdNodeReplace.env.nodeDoubleCheckGraceTime }}
         - name: KUBERNETES_CLUSTER_DOMAIN
           value: {{ quote .Values.kubernetesClusterDomain }}
+        ports:
+        - name: metrics
+          containerPort: 9090
+          protocol: TCP
         resources: {}
