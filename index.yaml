@@ -21,4 +21,16 @@ entries:
     urls:
     - https://github.com/normalzzz/npd-node-replace/releases/download/npd-node-replace-0.1.2/npd-node-replace-0.1.2.tgz
     version: 0.1.2
-generated: "2026-03-24T08:34:31.521412436Z"
+  npd-node-replace-v2:
+  - apiVersion: v2
+    appVersion: 2.0.0
+    created: "2026-04-10T06:52:52.371274599Z"
+    description: Node auto-repair for Amazon EKS with score-bucket tolerance, escalation,
+      and per-node-type policies
+    digest: b7c2e8553714fa299dfa8302b3cc0021e739e6ba2f6e279aaf3a93b6d33bfef5
+    name: npd-node-replace-v2
+    type: application
+    urls:
+    - https://github.com/normalzzz/npd-node-replace/releases/download/npd-node-replace-v2-2.0.0/npd-node-replace-v2-2.0.0.tgz
+    version: 2.0.0
+generated: "2026-04-10T06:52:52.371283416Z"
