@@ -4,7 +4,7 @@
 npd-node-replace 组件用于缓解当前 Amazon EKS 在中国区EKS 集群中的问题节点无法被及时处理的痛点
 推荐使用当前版本为 v0.1.3 （https://github.com/normalzzz/npd-node-replace/releases/tag/npd-node-replace-0.1.3）
 
-**npd-node-replace-v2 版本的最新版本为 v2.0.0, Release 详见： https://github.com/normalzzz/npd-node-replace/releases/tag/npd-node-replace-v2-2.0.0**
+**npd-node-replace-v2 版本的最新版本为 v2.0.1, Release 详见： https://github.com/normalzzz/npd-node-replace/releases/tag/npd-node-replace-v2-2.0.1**
 
 
 npd-node-replace 的主要功能如下：

@@ -2,8 +2,8 @@ name: Build and Push Multi-Arch Image
 
 on:
   push:
-    branches:
-      - main
+    tags:
+      - 'v*'
 
 env:
   PLATFORMS: linux/amd64,linux/arm64
@@ -19,9 +19,7 @@ jobs:
       - name: Set image tag
         id: meta
         run: |
-          COMMIT=$(git rev-parse --short HEAD)
-          TS=$(date +'%Y%m%d-%H%M')
-          echo "tag=${COMMIT}-${TS}" >> "$GITHUB_OUTPUT"
+          echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
 
       # ── Docker Buildx ──
       - name: Set up QEMU
