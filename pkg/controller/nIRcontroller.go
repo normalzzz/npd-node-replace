@@ -35,10 +35,6 @@ import (
 
 const workercount = 3
 
-// var tolerance config.Tolerance
-
-var newNodeChan chan string
-
 type NIRController struct {
 	nodeIssueReportInformer nodeIssueReport.NodeIssueReportInformer
 
@@ -57,10 +53,6 @@ type NIRController struct {
 	selfpodnamespace      string
 	selfnodename          string
 	logger                log.Entry
-}
-
-func init() {
-	newNodeChan = make(chan string, 10)
 }
 
 func (n *NIRController) enqueue(obj interface{}) {
@@ -103,57 +95,40 @@ func (n *NIRController) isNodeReady(node *v1.Node) bool {
 	return false
 }
 
-func (n *NIRController) nodeUpdateHandler(oldObj interface{}, newObj interface{}) {
-
-	oldNodeObj := oldObj.(*v1.Node)
-
-	newNodeObj := newObj.(*v1.Node)
-	// check if new node become ready, filt out old nodes become ready again
-	isNewNodeBecomeReady := time.Since(newNodeObj.ObjectMeta.CreationTimestamp.Time) <= 15*time.Minute
-	oldReady := n.isNodeReady(oldNodeObj)
-	newReady := n.isNodeReady(newNodeObj)
-
-	if !oldReady && newReady && isNewNodeBecomeReady {
-		n.logger.Infoln("New node joined and ready:", newNodeObj.Name)
-		if n.ifNeedAddToChan(newNodeObj) {
-			select {
-			case newNodeChan <- newNodeObj.Name:
-				n.logger.Infoln("Sent node  to newNodeChan", newNodeObj.Name)
-			default:
-				n.logger.Warningf("newNodeChan blocked, failed to send %s", newNodeObj.Name)
-			}
-		}
-
-	}
-}
-
-func (n *NIRController) ifNeedAddToChan(newNodeObj *v1.Node) bool {
-	// add logic to determin if the newready node is expected to add to channel:
-	nodeIssueReportlist, err := n.nodeIssueReportLister.List(labels.Everything())
+// findReadyReplacementNode scans all nodes to find one that:
+// 1. Was created recently (within 15 minutes)
+// 2. Is Ready
+// 3. Belongs to the same nodegroup as the old node
+// Returns the node name if found, empty string otherwise.
+func (n *NIRController) findReadyReplacementNode(oldNode *v1.Node) string {
+	nodes, err := n.nodelister.List(labels.Everything())
 	if err != nil {
-		n.logger.Errorln("failed to list NodeIssueReport resources when check if need add to chan:", err)
-		return false
+		n.logger.Errorln("[node detached phase] failed to list nodes:", err)
+		return ""
 	}
-	if nodeIssueReportlist == nil || len(nodeIssueReportlist) == 0 {
-		n.logger.Infoln("no NodeIssueReport resources exist, no need to add new node to chan:", newNodeObj.Name)
-		return false
-	}
-	for _, nodeIssueReport := range nodeIssueReportlist {
-		if nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseDetached {
-			oldNodeObj, err := n.nodelister.Get(nodeIssueReport.Spec.NodeName)
-			if err != nil {
-				n.logger.Errorln("failed to get old node object when check if need add to chan:", err)
-				continue
-			}
-			if !n.checkIfNewnodeExpected(oldNodeObj, newNodeObj) {
-				n.logger.Infoln("the new node is not expected node for replacement, skip it:", newNodeObj.Name)
-				continue
-			}
-			n.logger.Infoln("there is NodeIssueReport resource in detached phase, this new node is what we expect, need to add new node to chan:", newNodeObj.Name)
-			return true
+
+	oldNodegroup := oldNode.GetLabels()["eks.amazonaws.com/nodegroup"]
+
+	for _, node := range nodes {
+		// Skip the old node itself
+		if node.Name == oldNode.Name {
+			continue
 		}
+		// Must be created recently (within 15 minutes)
+		if time.Since(node.ObjectMeta.CreationTimestamp.Time) > 15*time.Minute {
+			continue
+		}
+		// Must be Ready
+		if !n.isNodeReady(node) {
+			continue
+		}
+		// Must belong to the same nodegroup
+		if node.GetLabels()["eks.amazonaws.com/nodegroup"] != oldNodegroup {
+			continue
+		}
+		return node.Name
 	}
-	return false
+	return ""
 }
 
 func (n *NIRController) taintNoexecuteOnNode(nodeobj *v1.Node) error {
@@ -383,26 +358,33 @@ func (n *NIRController) processNextItem() bool {
 	}
 
 	if nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseDetached {
+		n.logger.Infoln("[node detached phase] checking if a replacement node has joined for:", nodename)
 
-		n.logger.Infoln("[node detached phase] Waiting for new node joining .....")
-		select {
-		case newNodeName := <-newNodeChan:
-			n.logger.Infoln("[node detached phase] New node ready:", newNodeName)
-
-			nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseNewJoined
-			if _, err = n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.TODO(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
-				n.logger.Infoln("[node detached phase] faile to change phase to newnodejoined with error:", err)
-				n.queue.AddRateLimited(key)
-				return true
+		// Non-blocking: check if a matching replacement node is already Ready
+		newNodeName := n.findReadyReplacementNode(nodeobj)
+		if newNodeName == "" {
+			// Check if we've been waiting too long (15 minutes since detach)
+			detachTime := nodeIssueReport.Spec.LastUpdateTime.Time
+			if !detachTime.IsZero() && time.Since(detachTime) > 15*time.Minute {
+				n.logger.Errorln("[node detached phase] timed out waiting for replacement node for:", nodename)
+				if err := n.awsOperator.SNSNotify(*nodeIssueReport, "replacement-timeout"); err != nil {
+					n.logger.Error("[node detached phase] failed to notify admin about timeout:", err)
+				}
 			}
-			n.logger.Infoln("[node detached phase] detached phase passed, change phase to newnodejoined ")
-			return true
-		// changed timout time from 5 minutes to 15 minutes
-		case <-time.After(15 * time.Minute):
-			n.logger.Errorln("timed out waiting for new node to become ready")
+			// No replacement node yet, requeue and check again later
 			n.queue.AddRateLimited(key)
 			return true
 		}
+
+		n.logger.Infoln("[node detached phase] replacement node ready:", newNodeName)
+		nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseNewJoined
+		if _, err = n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Update(context.TODO(), nodeIssueReport, metav1.UpdateOptions{}); err != nil {
+			n.logger.Errorln("[node detached phase] failed to change phase to newnodejoined:", err)
+			n.queue.AddRateLimited(key)
+			return true
+		}
+		n.logger.Infoln("[node detached phase] phase changed to newnodejoined")
+		return true
 	}
 
 	if nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseReplace {
@@ -753,25 +735,6 @@ func (n *NIRController) getToleranceConfigForNode(nodeobj *v1.Node) (*nodeIssueR
 	return nil, nil
 }
 
-func (n *NIRController) checkIfNewnodeExpected(nodeobj *v1.Node, newnodeobj *v1.Node) bool {
-	// add logic to determin if the newready node is exptected node for replacement
-	isNewNodeBecomeReadycheck := time.Since(newnodeobj.ObjectMeta.CreationTimestamp.Time) <= 15*time.Minute
-
-	if !isNewNodeBecomeReadycheck {
-		n.logger.Infoln("[node detached phase] the new node is not created recently, may be an old node become ready again, just skip it:", newnodeobj.Name)
-		return false
-	}
-
-	newnodelables := newnodeobj.GetLabels()
-	oldnodelabels := nodeobj.GetLabels()
-	if newnodelables["eks.amazonaws.com/nodegroup"] != oldnodelabels["eks.amazonaws.com/nodegroup"] {
-		n.logger.Infoln("[node detached phase] the new node's nodegroup label is different from old node, is not the node we expepct", newnodeobj.Name)
-		return false
-	}
-	return true
-
-}
-
 func (n *NIRController) worker() {
 	n.logger.Infoln("Running NIRcontorller worker")
 	for n.processNextItem() {
@@ -781,7 +744,7 @@ func (n *NIRController) worker() {
 
 func (n *NIRController) Run(stopch <-chan struct{}) {
 	n.logger.Println("Worker is processing events...")
-	if !cache.WaitForCacheSync(stopch, n.nodeInformer.Informer().HasSynced, n.nodeIssueReportInformer.Informer().HasSynced, n.toleranceConfigInformer.Informer().HasSynced,) {
+	if !cache.WaitForCacheSync(stopch, n.nodeInformer.Informer().HasSynced, n.nodeIssueReportInformer.Informer().HasSynced, n.toleranceConfigInformer.Informer().HasSynced) {
 		n.logger.Infoln("Timed out waiting for caches to sync")
 		return
 	}
@@ -794,7 +757,6 @@ func (n *NIRController) Run(stopch <-chan struct{}) {
 
 	<-stopch
 	n.logger.Infoln("Shutting down NIRController")
-	close(newNodeChan)
 }
 
 // cleanupExpiredNIRs scans all NodeIssueReport resources and deletes those
@@ -864,9 +826,6 @@ func NewNIRController(nodeIssueReportInformer nodeIssueReport.NodeIssueReportInf
 			UpdateFunc: n.nIRUpdateFunctionHandler,
 		})
 
-	n.nodeInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
-		UpdateFunc: n.nodeUpdateHandler,
-	})
 	// Add event handlers to informers here, e.g. n.nodeIssueReportInformer.Informer().AddEventHandler(...)
 	return n
 
