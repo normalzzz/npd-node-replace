@@ -420,5 +420,11 @@ FodyWeavers.xsd
 # Go build binary
 xingzhan-node-autoreplace
 
+# Go test binaries
+*.test
+
 # Go vendor directory
 vendor/
+
+.kiro
+.kiro/*
