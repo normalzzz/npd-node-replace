@@ -781,7 +781,10 @@ func (n *NIRController) worker() {
 
 func (n *NIRController) Run(stopch <-chan struct{}) {
 	n.logger.Println("Worker is processing events...")
-
+	if !cache.WaitForCacheSync(stopch, n.nodeInformer.Informer().HasSynced, n.nodeIssueReportInformer.Informer().HasSynced, n.toleranceConfigInformer.Informer().HasSynced,) {
+		n.logger.Infoln("Timed out waiting for caches to sync")
+		return
+	}
 	for i := 0; i < workercount; i++ {
 		go wait.Until(n.worker, time.Second, stopch)
 	}

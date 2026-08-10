@@ -77,7 +77,12 @@ func (a *AwsOperator) GetASGId(instanceid string) (string, error) {
 
 	describeinstancesout, err := a.ec2client.DescribeInstances(context.Background(), &describeinstanceInput)
 	if err != nil {
-		log.Errorln("faile to describe instance:", instanceid, "with error:", err)
+    log.Errorln("failed to describe instance:", instanceid, "with error:", err)
+		return "", fmt.Errorf("failed to describe instance %s: %w", instanceid, err)
+		}
+
+	if len(describeinstancesout.Reservations) == 0 || len(describeinstancesout.Reservations[0].Instances) == 0 {
+		return "", fmt.Errorf("no instance found for id %s", instanceid)
 	}
 	asgname := ""
 	tags := describeinstancesout.Reservations[0].Instances[0].Tags
@@ -88,7 +93,6 @@ func (a *AwsOperator) GetASGId(instanceid string) (string, error) {
 		}
 	}
 	if asgname == "" {
-
 		return "", errors.New("faile to find ASG name from instance tag")
 	}
 	return asgname, nil
