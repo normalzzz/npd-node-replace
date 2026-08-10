@@ -6,6 +6,13 @@ npdNodeReplace:
     repository: zxxxxzz/npd-node-replace-v2
     tag: latest
   imagePullPolicy: Always
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
   env:
     snsTopicArn: ""
     awsRegion: ""

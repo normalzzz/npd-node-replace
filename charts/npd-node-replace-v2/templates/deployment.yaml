@@ -49,4 +49,26 @@ spec:
         - name: metrics
           containerPort: 9090
           protocol: TCP
-        resources: {}
+        livenessProbe:
+          httpGet:
+            path: /metrics
+            port: metrics
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /metrics
+            port: metrics
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        resources:
+          requests:
+            cpu: {{ .Values.npdNodeReplace.resources.requests.cpu | default "50m" }}
+            memory: {{ .Values.npdNodeReplace.resources.requests.memory | default "64Mi" }}
+          limits:
+            cpu: {{ .Values.npdNodeReplace.resources.limits.cpu | default "200m" }}
+            memory: {{ .Values.npdNodeReplace.resources.limits.memory | default "256Mi" }}
