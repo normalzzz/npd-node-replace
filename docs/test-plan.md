@@ -194,12 +194,13 @@ eventScores:
 1. NIR Phase 变为 `phasereboot`
 2. 节点被 cordon + drain
 3. EC2 RebootInstances API 被调用
-4. Phase 变为 `phaserebooted`
-5. 等待 2 分钟 grace period
-6. 等待节点恢复 Ready
-7. 节点被 uncordon
-8. SNS 通知发送（subject 包含 "Node REBOOTED"）
-9. NIR 重置为 Phase=PhaseNone, Action=None（不删除）
+4. reboot-started SNS 通知发送，NIR annotation 状态持久化为 `sent:<action-id>`
+5. Phase 变为 `phaserebooted`
+6. 等待 2 分钟 grace period
+7. 等待节点恢复 Ready
+8. 节点被 uncordon
+9. reboot-completed SNS 通知发送，NIR annotation 状态持久化为 `sent:<action-id>`
+10. NIR 重置为 Phase=PhaseNone, Action=None（不删除）
 
 ### TC-3.2 Reboot grace period 等待
 
@@ -531,7 +532,8 @@ maxConcurrentActions: 1
 
 | 场景 | 预期 Subject |
 |------|-------------|
-| reboot 完成 | `[npd-node-replace] Node REBOOTED due to persistent issues` |
+| reboot 发起 | `[npd-node-replace] Node reboot started due to persistent issues` |
+| reboot 完成 | `[npd-node-replace] Node reboot completed` |
 | replace 完成 | `[npd-node-replace] Node REPLACED due to persistent issues` |
 | paging | `[npd-node-replace] Node issues detected - admin notification (paging)` |
 | allowOperation=false | `[npd-node-replace] Node issues detected - auto-action disabled, notify only` |

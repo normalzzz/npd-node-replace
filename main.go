@@ -98,7 +98,7 @@ func onStartedLeading(clientset *kubernetes.Clientset, nirClient *nirclient.Clie
 		toleranceConfigInformer := nodeIssueReportFactory.Nodeissuereporter().V1alpha1().ToleranceConfigs()
 
 		eventcontroller := controller.NewEventController(eventInformer, nodeIssueReportInformer, toleranceConfigInformer, *clientset, *nirClient, nodeInformer)
-		nircontroller := controller.NewNIRController(nodeIssueReportInformer, toleranceConfigInformer, *nirClient, *clientset, *awsOperator, nodeInformer)
+		nircontroller := controller.NewNIRController(nodeIssueReportInformer, toleranceConfigInformer, nirClient, *clientset, awsOperator, nodeInformer)
 		nodecontroller := controller.NewNodeController(nodeInformer, *nirClient, nodeIssueReportInformer)
 
 		leaderStopCh := ctx.Done()

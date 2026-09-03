@@ -115,11 +115,27 @@ type snsCall struct {
 type mockAwsOperator struct {
 	snsNotifyCalls []snsCall
 	snsErr         error
+	rebootCalls    []string
+	detachCalls    [][2]string
 }
 
 func (m *mockAwsOperator) SNSNotify(nir nodeIssueReportv1alpha1.NodeIssueReport, reason string) error {
 	m.snsNotifyCalls = append(m.snsNotifyCalls, snsCall{NIR: nir, Reason: reason})
 	return m.snsErr
+}
+
+func (m *mockAwsOperator) RebootInstance(instanceID string) error {
+	m.rebootCalls = append(m.rebootCalls, instanceID)
+	return nil
+}
+
+func (m *mockAwsOperator) DetachInstance(asgID string, instanceID string) error {
+	m.detachCalls = append(m.detachCalls, [2]string{asgID, instanceID})
+	return nil
+}
+
+func (m *mockAwsOperator) GetASGId(string) (string, error) {
+	return "test-asg", nil
 }
 
 // --- Helper Functions ---

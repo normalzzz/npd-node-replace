@@ -74,6 +74,8 @@ func (c *NodeController) constructNodeIssueReportForNode(nodename string) *nodeI
 }
 
 func (c *NodeController) updateNodeIssueReport(nir *nodeIssueReportv1alpha1.NodeIssueReport, nodeobj *corev1.Node) error {
+	// Informer lister results are shared cache objects. Always mutate a copy.
+	nir = nir.DeepCopy()
 	nodestatus, _ := c.checknodestatus(nodeobj)
 
 	switch nodestatus {
@@ -233,6 +235,7 @@ func (c *NodeController) processNextItemDelayqueue() bool {
 			c.logger.Infof("Node %s NIR is already in active phase %s, skip setting replace action", nodeobj.Name, nodeissuereport.Spec.Phase)
 			return true
 		}
+		nodeissuereport = nodeissuereport.DeepCopy()
 
 		if status, _ := c.checknodestatus(nodeobj); status == corev1.ConditionUnknown {
 			c.logger.Infoln("Node", nodeobj.Name, "status is unknown, set force replace action directly")
@@ -257,6 +260,7 @@ func (c *NodeController) processNextItemDelayqueue() bool {
 		}
 
 		if c.checkIfNodeIssueReportHaveIssueRecorded(nodeissuereport) {
+			nodeissuereport = nodeissuereport.DeepCopy()
 			nodeissuereport.Spec.NodeStatus = nodeIssueReportv1alpha1.NodeReadyStatus
 			// nodeissuereport.Spec.Action = nodeIssueReportv1alpha1.None
 			_, err = c.nirclient.NodeissuereporterV1alpha1().NodeIssueReports("default").Update(context.Background(), nodeissuereport, metav1.UpdateOptions{})

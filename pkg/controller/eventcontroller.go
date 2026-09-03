@@ -204,6 +204,8 @@ func (c *EventController) constructNodeIssueReport(event *corev1.Event) nodeIssu
 // }
 
 func (c *EventController) updateNodeIssueReport(nodeissuereport *nodeIssueReportv1alpha1.NodeIssueReport, event *corev1.Event) error {
+	// Informer lister results are shared cache objects. Always mutate a copy.
+	nodeissuereport = nodeissuereport.DeepCopy()
 	//nodeissuereport.Spec.NodeProblems[nodeIssueReportv1alpha1.ReasonRecord{Reason: event.Reason, Count: event.Count}] = []string{event.Message}
 	//_, err := c.nirclient.NodeissuereporterV1alpha1().NodeIssueReports(nodeissuereport.Namespace).Update(context.Background(), nodeissuereport, metav1.UpdateOptions{})
 	//if err != nil {

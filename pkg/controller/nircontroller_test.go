@@ -1,12 +1,14 @@
 package controller
 
 import (
+	"context"
 	"os"
 	"testing"
 	"time"
 
 	nodeIssueReportv1alpha1 "xingzhan-node-autoreplace/pkg/apis/nodeIssueReport/v1alpha1"
 	awspkg "xingzhan-node-autoreplace/pkg/aws"
+	nirfake "xingzhan-node-autoreplace/pkg/generated/clientset/versioned/fake"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	log "github.com/sirupsen/logrus"
@@ -288,9 +290,109 @@ func TestCountActiveActionsForEntry(t *testing.T) {
 	}
 }
 
+func TestNotifyRebootOncePersistsAndDeduplicates(t *testing.T) {
+	actionTime := metav1.NewTime(time.Date(2026, time.September, 3, 8, 28, 52, 123456789, time.UTC))
+	nir := &nodeIssueReportv1alpha1.NodeIssueReport{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "node-1",
+			Namespace: "default",
+		},
+		Spec: nodeIssueReportv1alpha1.NodeIssueReportSpec{
+			NodeName:       "node-1",
+			Action:         nodeIssueReportv1alpha1.Reboot,
+			Phase:          nodeIssueReportv1alpha1.PhaseReboot,
+			LastActionTime: actionTime,
+		},
+	}
+
+	nirClient := nirfake.NewSimpleClientset(nir.DeepCopy())
+	awsOperator := &mockAwsOperator{}
+	ctrl := &NIRController{
+		nodeIssueReportClient: nirClient,
+		awsOperator:           awsOperator,
+		logger:                *log.WithField("component", "test"),
+	}
+
+	updated, attempted, err := ctrl.notifyRebootOnce(context.Background(), nir, rebootStartedNotificationAnnotation, "reboot-started")
+	if err != nil {
+		t.Fatalf("first notifyRebootOnce() error = %v", err)
+	}
+	if !attempted {
+		t.Fatal("first notifyRebootOnce() did not attempt a notification")
+	}
+	if len(awsOperator.snsNotifyCalls) != 1 {
+		t.Fatalf("SNS calls = %d, want 1", len(awsOperator.snsNotifyCalls))
+	}
+	if awsOperator.snsNotifyCalls[0].Reason != "reboot-started" {
+		t.Fatalf("SNS reason = %q, want reboot-started", awsOperator.snsNotifyCalls[0].Reason)
+	}
+
+	actionID := rebootNotificationActionID(nir)
+	wantState := notificationAnnotationValue(notificationSent, actionID)
+	if got := updated.Annotations[rebootStartedNotificationAnnotation]; got != wantState {
+		t.Fatalf("persisted notification state = %q, want %q", got, wantState)
+	}
+
+	// Deliberately retry with the original stale informer snapshot. The helper
+	// must read the persisted annotation and suppress the duplicate.
+	updated, attempted, err = ctrl.notifyRebootOnce(context.Background(), nir, rebootStartedNotificationAnnotation, "reboot-started")
+	if err != nil {
+		t.Fatalf("second notifyRebootOnce() error = %v", err)
+	}
+	if attempted {
+		t.Fatal("second notifyRebootOnce() attempted a duplicate notification")
+	}
+	if len(awsOperator.snsNotifyCalls) != 1 {
+		t.Fatalf("SNS calls after retry = %d, want 1", len(awsOperator.snsNotifyCalls))
+	}
+}
+
+func TestRebootNotificationUsesSeparatePersistentStates(t *testing.T) {
+	actionTime := metav1.NewTime(time.Date(2026, time.September, 3, 8, 28, 52, 0, time.UTC))
+	nir := &nodeIssueReportv1alpha1.NodeIssueReport{
+		ObjectMeta: metav1.ObjectMeta{Name: "node-1", Namespace: "default"},
+		Spec: nodeIssueReportv1alpha1.NodeIssueReportSpec{
+			NodeName:       "node-1",
+			Action:         nodeIssueReportv1alpha1.Reboot,
+			Phase:          nodeIssueReportv1alpha1.PhaseRebooted,
+			LastActionTime: actionTime,
+		},
+	}
+
+	nirClient := nirfake.NewSimpleClientset(nir.DeepCopy())
+	awsOperator := &mockAwsOperator{}
+	ctrl := &NIRController{
+		nodeIssueReportClient: nirClient,
+		awsOperator:           awsOperator,
+		logger:                *log.WithField("component", "test"),
+	}
+
+	updated, _, err := ctrl.notifyRebootOnce(context.Background(), nir, rebootStartedNotificationAnnotation, "reboot-started")
+	if err != nil {
+		t.Fatalf("started notification error = %v", err)
+	}
+	updated, _, err = ctrl.notifyRebootOnce(context.Background(), updated, rebootCompletedNotificationAnnotation, "reboot-completed")
+	if err != nil {
+		t.Fatalf("completed notification error = %v", err)
+	}
+
+	if len(awsOperator.snsNotifyCalls) != 2 {
+		t.Fatalf("SNS calls = %d, want 2", len(awsOperator.snsNotifyCalls))
+	}
+	if awsOperator.snsNotifyCalls[0].Reason != "reboot-started" || awsOperator.snsNotifyCalls[1].Reason != "reboot-completed" {
+		t.Fatalf("SNS reasons = %q, %q", awsOperator.snsNotifyCalls[0].Reason, awsOperator.snsNotifyCalls[1].Reason)
+	}
+	if updated.Annotations[rebootStartedNotificationAnnotation] == "" {
+		t.Fatal("reboot-started state was not persisted")
+	}
+	if updated.Annotations[rebootCompletedNotificationAnnotation] == "" {
+		t.Fatal("reboot-completed state was not persisted")
+	}
+}
+
 func TestIsDryRun(t *testing.T) {
-	// For isDryRun, since awsOperator is a concrete struct and SNSNotify needs a real
-	// SNS client, we test only the boolean return value. When DryRun=true, isDryRun
+	// For isDryRun, SNSNotify needs a real SNS client, so this test only checks the
+	// boolean return value. When DryRun=true, isDryRun
 	// returns true regardless of SNS notification success/failure.
 	// We set SNS_TOPIC_ARN to avoid empty topic issues and create a real AwsOperator
 	// with a dummy config so snscli is not nil (it will fail on Publish but isDryRun
@@ -314,7 +416,7 @@ func TestIsDryRun(t *testing.T) {
 			DryRun: true,
 		}
 		ctrl := &NIRController{
-			awsOperator: *dummyOp,
+			awsOperator: dummyOp,
 			logger:      *log.WithField("component", "test"),
 		}
 		got := ctrl.isDryRun(entry, nir, "reboot")
@@ -328,7 +430,7 @@ func TestIsDryRun(t *testing.T) {
 			DryRun: false,
 		}
 		ctrl := &NIRController{
-			awsOperator: *dummyOp,
+			awsOperator: dummyOp,
 			logger:      *log.WithField("component", "test"),
 		}
 		got := ctrl.isDryRun(entry, nir, "reboot")
