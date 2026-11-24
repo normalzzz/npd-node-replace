@@ -55,16 +55,36 @@ func (c *NodeController) requeueDelayAfter(key string, err error) {
 	c.delayqueue.AddAfter(key, delay)
 }
 
-func (c *NodeController) constructNodeIssueReportForNode(nodename string) *nodeIssueReportv1alpha1.NodeIssueReport {
+func nodeReportMetadata(node *corev1.Node, namespace string) metav1.ObjectMeta {
+	return metav1.ObjectMeta{
+		Name:      node.Name,
+		Namespace: namespace,
+		OwnerReferences: []metav1.OwnerReference{{
+			APIVersion: "v1",
+			Kind:       "Node",
+			Name:       node.Name,
+			UID:        node.UID,
+		}},
+	}
+}
+
+func reportMatchesNode(nir *nodeIssueReportv1alpha1.NodeIssueReport, node *corev1.Node) bool {
+	for _, owner := range nir.OwnerReferences {
+		if owner.APIVersion == "v1" && owner.Kind == "Node" {
+			return owner.Name == node.Name && owner.UID == node.UID
+		}
+	}
+	// Reports created before Node ownership was introduced have no Node reference.
+	return true
+}
+
+func (c *NodeController) constructNodeIssueReportForNode(node *corev1.Node) *nodeIssueReportv1alpha1.NodeIssueReport {
 	nodeproblem := make(map[string]nodeIssueReportv1alpha1.ProblemRecord)
 
 	return &nodeIssueReportv1alpha1.NodeIssueReport{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      nodename,
-			Namespace: "default",
-		},
+		ObjectMeta: nodeReportMetadata(node, "default"),
 		Spec: nodeIssueReportv1alpha1.NodeIssueReportSpec{
-			NodeName:     nodename,
+			NodeName:     node.Name,
 			NodeProblems: nodeproblem,
 			NodeStatus:   nodeIssueReportv1alpha1.NodeNotReadyStatus,
 			Action:       nodeIssueReportv1alpha1.None,
@@ -197,11 +217,20 @@ func (c *NodeController) processNextItemDelayqueue() bool {
 	defer c.delayqueue.Done(key)
 	c.logger.Infoln("Delayqueue processing key:", key)
 
+	nodeissuereport, err := c.nodeIssueReportLister.NodeIssueReports("default").Get(key)
+	if errors.IsNotFound(err) {
+		return true
+	}
+	if err != nil {
+		c.requeueDelayAfter(key, err)
+		return true
+	}
+	deleteReport := metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &nodeissuereport.UID}}
 	nodeobj, err := c.nodeLister.Get(key)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			c.logger.Infoln("Node", key, "not found, maybe deleted, no need to process further")
-			if err = c.nirclient.NodeissuereporterV1alpha1().NodeIssueReports("default").Delete(context.TODO(), key, metav1.DeleteOptions{}); err != nil {
+			if err = c.nirclient.NodeissuereporterV1alpha1().NodeIssueReports("default").Delete(context.TODO(), key, deleteReport); err != nil && !errors.IsNotFound(err) {
 				c.logger.Errorln("failed to delete node issue report after node recovered to ready status, need to delete node issue report manually", err)
 				c.requeueDelayAfter(key, err)
 				return true
@@ -213,23 +242,12 @@ func (c *NodeController) processNextItemDelayqueue() bool {
 		return true
 	}
 
-	if !c.isManagedByASG(nodeobj) {
+	if !c.isManagedByASG(nodeobj) || !reportMatchesNode(nodeissuereport, nodeobj) {
 		return true
 	}
 
 	if status, _ := c.checknodestatus(nodeobj); status != corev1.ConditionTrue {
 		c.logger.Warnln("Node", nodeobj.Name, "failed the second time status check, update the node issue report resource to perform node replace action", time.Now())
-		nodeissuereport, err := c.nodeIssueReportLister.NodeIssueReports("default").Get(nodeobj.Name)
-		if err != nil {
-			if errors.IsNotFound(err) {
-				c.logger.Infoln("no node issue report found for the node: ", nodeobj.Name, " maybe deleted meanwhile, no need to process further")
-				return true
-			}
-			c.logger.Error("Failed to get node issue report from lister:", err)
-			c.requeueDelayAfter(key, err)
-			return true
-		}
-
 		// Don't override action if NIR is already in an active phase (e.g. reboot in progress)
 		if nodeissuereport.Spec.Phase != nodeIssueReportv1alpha1.PhaseNone {
 			c.logger.Infof("Node %s NIR is already in active phase %s, skip setting replace action", nodeobj.Name, nodeissuereport.Spec.Phase)
@@ -252,13 +270,6 @@ func (c *NodeController) processNextItemDelayqueue() bool {
 
 	} else {
 		c.logger.Infoln("Node", nodeobj.Name, "recoverd to ready status now, remove the not ready mark from node issue report resource", time.Now())
-		nodeissuereport, err := c.nodeIssueReportLister.NodeIssueReports("default").Get(nodeobj.Name)
-		if err != nil {
-			c.logger.Error("Failed to get node issue report from lister:", err)
-			c.logger.Error("maybe node issue report resource already deleted (some action has been done), no need to process further")
-			return true
-		}
-
 		if c.checkIfNodeIssueReportHaveIssueRecorded(nodeissuereport) {
 			nodeissuereport = nodeissuereport.DeepCopy()
 			nodeissuereport.Spec.NodeStatus = nodeIssueReportv1alpha1.NodeReadyStatus
@@ -270,7 +281,7 @@ func (c *NodeController) processNextItemDelayqueue() bool {
 				return true
 			}
 		} else {
-			if err = c.nirclient.NodeissuereporterV1alpha1().NodeIssueReports("default").Delete(context.TODO(), nodeissuereport.Name, metav1.DeleteOptions{}); err != nil {
+			if err = c.nirclient.NodeissuereporterV1alpha1().NodeIssueReports("default").Delete(context.TODO(), nodeissuereport.Name, deleteReport); err != nil && !errors.IsNotFound(err) {
 				c.logger.Errorln("failed to delete node issue report after node recovered to ready status, need to delete node issue report manually", err)
 				c.requeueDelayAfter(key, err)
 				return true
@@ -336,7 +347,7 @@ func (c *NodeController) processNextItem() bool {
 
 	if errors.IsNotFound(err) {
 		c.logger.Infoln("no node issue report found for the node: ", nodename)
-		nir := c.constructNodeIssueReportForNode(nodename)
+		nir := c.constructNodeIssueReportForNode(nodeobj)
 		_, err = c.nirclient.NodeissuereporterV1alpha1().NodeIssueReports("default").Create(context.Background(), nir, metav1.CreateOptions{})
 		if err != nil {
 			c.logger.Errorln("failed to create node issue report", err)
@@ -349,6 +360,10 @@ func (c *NodeController) processNextItem() bool {
 		return true
 	}
 
+	if err != nil || !reportMatchesNode(nodeissuereport, nodeobj) {
+		c.requeue(key)
+		return true
+	}
 	c.logger.Infoln("updating NodeIssueReport for node:", nodeobj.Name, ":", key, time.Now())
 
 	err = c.updateNodeIssueReport(nodeissuereport, nodeobj)

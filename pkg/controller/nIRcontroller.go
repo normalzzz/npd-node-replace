@@ -224,7 +224,7 @@ func (n *NIRController) countActiveActionsForEntry(entry *nodeIssueReportv1alpha
 		if err != nil {
 			continue
 		}
-		if val, exists := nodeobj.GetLabels()[parts[0]]; exists && val == parts[1] {
+		if val, exists := nodeobj.GetLabels()[parts[0]]; exists && val == parts[1] && reportMatchesNode(nir, nodeobj) {
 			count++
 		}
 	}
@@ -400,7 +400,14 @@ func (n *NIRController) processNextItem() bool {
 
 	nodename := nodeIssueReport.Spec.NodeName
 
-	nodeobj, err := n.nodelister.Get(nodename)
+	var nodeobj *v1.Node
+	switch nodeIssueReport.Spec.Phase {
+	case nodeIssueReportv1alpha1.PhaseReplace, nodeIssueReportv1alpha1.PhaseReboot,
+		nodeIssueReportv1alpha1.PhaseRebooted, nodeIssueReportv1alpha1.PhaseNewJoined, nodeIssueReportv1alpha1.PhaseDrained:
+		nodeobj, err = n.kubeclient.CoreV1().Nodes().Get(context.Background(), nodename, metav1.GetOptions{})
+	default:
+		nodeobj, err = n.nodelister.Get(nodename)
+	}
 	if errors.IsNotFound(err) {
 		n.logger.Infoln("node object not found, may be already deleted:", nodename)
 		return true
@@ -411,7 +418,14 @@ func (n *NIRController) processNextItem() bool {
 		return true
 	}
 
+	if !reportMatchesNode(nodeIssueReport, nodeobj) {
+		n.logger.Infof("Skipping report %s because its owner differs from Node %s (%s)", key, nodeobj.Name, nodeobj.UID)
+		return true
+	}
+
 	if nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseDrained {
+		deleteNode := metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &nodeobj.UID}}
+		deleteReport := metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &nodeIssueReport.UID}}
 		if nodeIssueReport.Name == n.selfnodename {
 
 			// Notify admin with SNS
@@ -421,7 +435,7 @@ func (n *NIRController) processNextItem() bool {
 				return true
 			}
 			// delete nodeIssueReport
-			if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Delete(context.TODO(), nodeIssueReport.Name, metav1.DeleteOptions{}); err != nil {
+			if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Delete(context.TODO(), nodeIssueReport.Name, deleteReport); err != nil && !errors.IsNotFound(err) {
 				n.logger.Errorln("[node drained phase] faild to delete nodeIssueReport", nodeIssueReport.Name)
 			} else {
 				n.logger.Infoln("[node drained phase] replace Action done, deleted nodeIssueReport:", nodeIssueReport.Name)
@@ -429,7 +443,7 @@ func (n *NIRController) processNextItem() bool {
 			// delete issue node
 			if nodeIssueReport.Name == n.selfnodename {
 
-				if err := n.kubeclient.CoreV1().Nodes().Delete(context.TODO(), n.selfnodename, metav1.DeleteOptions{}); err != nil {
+				if err := n.kubeclient.CoreV1().Nodes().Delete(context.TODO(), nodename, deleteNode); err != nil {
 					n.logger.Errorln("[node drained phase] when trying to delete self node, error happened:", err)
 				}
 				if err := n.kubeclient.CoreV1().Pods(n.selfpodnamespace).Delete(context.TODO(), n.selfpodname, metav1.DeleteOptions{}); err != nil {
@@ -446,12 +460,12 @@ func (n *NIRController) processNextItem() bool {
 				n.queue.AddRateLimited(key)
 				return true
 			}
-			if err := n.kubeclient.CoreV1().Nodes().Delete(context.TODO(), nodeIssueReport.Name, metav1.DeleteOptions{}); err != nil {
+			if err := n.kubeclient.CoreV1().Nodes().Delete(context.TODO(), nodename, deleteNode); err != nil {
 				n.logger.Errorln("[node drained phase] when trying to delete none-self node, error happened:", err)
 				n.queue.AddRateLimited(key)
 				return true
 			}
-			if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Delete(context.TODO(), nodeIssueReport.Name, metav1.DeleteOptions{}); err != nil {
+			if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Delete(context.TODO(), nodeIssueReport.Name, deleteReport); err != nil && !errors.IsNotFound(err) {
 				n.logger.Errorln("[node drained phase] faild to delete nodeIssueReport", nodeIssueReport.Name, "with error:", err)
 			} else {
 				n.logger.Infoln("[node drained phase] replace Action done, deleted nodeIssueReport:", nodeIssueReport.Name)
@@ -464,12 +478,6 @@ func (n *NIRController) processNextItem() bool {
 	if nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseNewJoined {
 		// TODO drain
 		// err = n.drainNode(nodename)
-		nodeobj, err := n.nodelister.Get(nodename)
-		if err != nil {
-			n.logger.Errorln("[node newnodejoined phase] fail to get node object when trying to drain node:", nodename, "with error:", err)
-			n.queue.AddRateLimited(key)
-			return true
-		}
 		nodeobj = nodeobj.DeepCopy()
 
 		// for notready node, do normal drain
@@ -535,12 +543,6 @@ func (n *NIRController) processNextItem() bool {
 
 	if nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseReplace {
 		n.logger.Infoln("[node replace phase] do phase replace action for node:", nodename)
-		nodeobj, err := n.kubeclient.CoreV1().Nodes().Get(context.Background(), nodename, metav1.GetOptions{})
-		if err != nil {
-			n.logger.Errorln("fail to get the node:", nodename, "thus failed to deal with node issues: ", err)
-			n.queue.AddRateLimited(key)
-			return true
-		}
 		providerIDslice := strings.Split(nodeobj.Spec.ProviderID, "/")
 
 		instanceId := providerIDslice[len(providerIDslice)-1]
@@ -584,13 +586,6 @@ func (n *NIRController) processNextItem() bool {
 			n.logger.Infoln("[node rebooted phase] sent reboot-started notification for node:", nodename)
 		}
 		if nodeIssueReport.Spec.Phase != nodeIssueReportv1alpha1.PhaseRebooted {
-			return true
-		}
-
-		nodeobj, err := n.kubeclient.CoreV1().Nodes().Get(context.Background(), nodename, metav1.GetOptions{})
-		if err != nil {
-			n.logger.Errorln("[node rebooted phase] fail to get the node:", nodename, "with error", err)
-			n.queue.AddRateLimited(key)
 			return true
 		}
 
@@ -665,12 +660,6 @@ func (n *NIRController) processNextItem() bool {
 
 	if nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseReboot {
 		n.logger.Infoln("[node reboot phase] do phase reboot action for node:", nodename)
-		nodeobj, err := n.kubeclient.CoreV1().Nodes().Get(context.Background(), nodename, metav1.GetOptions{})
-		if err != nil {
-			n.logger.Errorln("[node reboot phase] fail to get the node:", nodename, "thus failed to deal with node issues: ", err)
-			n.queue.AddRateLimited(key)
-			return true
-		}
 		providerIDslice := strings.Split(nodeobj.Spec.ProviderID, "/")
 
 		instanceId := providerIDslice[len(providerIDslice)-1]
@@ -805,7 +794,7 @@ func (n *NIRController) processNextItem() bool {
 				if nodeIssueReport.Spec.Escalated {
 					// Escalated paging is a terminal action - delete NIR
 					n.logger.Infoln("[paging] escalated paging completed, deleting NIR for node:", nodename)
-					if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Delete(context.TODO(), nodeIssueReport.Name, metav1.DeleteOptions{}); err != nil {
+					if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Delete(context.TODO(), nodeIssueReport.Name, *metav1.NewPreconditionDeleteOptions(string(nodeIssueReport.UID))); err != nil && !errors.IsNotFound(err) {
 						n.logger.Errorln("[paging] failed to delete nodeIssueReport after escalated paging:", err)
 						n.queue.AddRateLimited(key)
 					}
@@ -957,7 +946,7 @@ func (n *NIRController) cleanupExpiredNIRs() {
 		}
 
 		nodeobj, err := n.nodelister.Get(nir.Spec.NodeName)
-		if err != nil {
+		if err != nil || !reportMatchesNode(nir, nodeobj) {
 			continue
 		}
 		toleranceEntry, err := n.getToleranceConfigForNode(nodeobj)
@@ -972,7 +961,7 @@ func (n *NIRController) cleanupExpiredNIRs() {
 			if err := n.awsOperator.SNSNotify(*nir, "cooldown-expired"); err != nil {
 				n.logger.Error("[lifecycle cleanup] failed to send final status notification:", err)
 			}
-			if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(nir.Namespace).Delete(context.TODO(), nir.Name, metav1.DeleteOptions{}); err != nil {
+			if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(nir.Namespace).Delete(context.TODO(), nir.Name, *metav1.NewPreconditionDeleteOptions(string(nir.UID))); err != nil && !errors.IsNotFound(err) {
 				n.logger.Errorln("[lifecycle cleanup] failed to delete expired NIR:", nir.Name, err)
 			}
 		}

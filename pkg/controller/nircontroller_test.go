@@ -2,6 +2,9 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
@@ -14,7 +17,61 @@ import (
 	log "github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/util/workqueue"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+func TestReplaceSkipsRecreatedNode(t *testing.T) {
+	original := newTestNode("node-1", nil, nil, nil)
+	original.UID = "original-uid"
+	nir := (&NodeController{}).constructNodeIssueReportForNode(original)
+	nir.Spec.Phase = nodeIssueReportv1alpha1.PhaseReplace
+	replacement := original.DeepCopy()
+	replacement.UID = "new-uid"
+
+	// The informer still has the old Node, while the API already serves its replacement.
+	replacement.TypeMeta = metav1.TypeMeta{APIVersion: "v1", Kind: "Node"}
+	readNode := false
+	kube, err := kubernetes.NewForConfig(&rest.Config{
+		Host: "https://kubernetes.test",
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.Method != http.MethodGet || req.URL.Path != "/api/v1/nodes/node-1" {
+				t.Fatalf("unexpected request: %s %s", req.Method, req.URL.Path)
+			}
+			readNode = true
+			resp := httptest.NewRecorder()
+			resp.Header().Set("Content-Type", "application/json")
+			err := json.NewEncoder(resp).Encode(replacement)
+			return resp.Result(), err
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	awsOperator := &mockAwsOperator{}
+	controller := &NIRController{
+		kubeclient:            *kube,
+		nodelister:            &fakeNodeLister{nodes: []*corev1.Node{original}},
+		nodeIssueReportLister: &fakeNodeIssueReportLister{nirs: []*nodeIssueReportv1alpha1.NodeIssueReport{nir}},
+		awsOperator:           awsOperator,
+		queue:                 workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
+		logger:                *log.WithField("component", "test"),
+	}
+	defer controller.queue.ShutDown()
+	controller.queue.Add(nir.Namespace + "/" + nir.Name)
+	controller.processNextItem()
+	if !readNode {
+		t.Fatal("expected live Node lookup")
+	}
+	if len(awsOperator.detachCalls) != 0 {
+		t.Fatalf("replacement Node was detached: %v", awsOperator.detachCalls)
+	}
+}
 
 func TestGetToleranceConfigForNode(t *testing.T) {
 	node := newTestNode("node-1", map[string]string{
