@@ -22,7 +22,7 @@ spec:
       dnsPolicy: Default
       containers:
       - name: npd-node-replace
-        image: {{ .Values.npdNodeReplace.image.repository }}:{{ .Values.npdNodeReplace.image.tag | default .Chart.AppVersion }}
+        image: {{ .Values.npdNodeReplace.image.repository }}:{{ .Values.npdNodeReplace.image.tag | default (printf "v%s" (trimPrefix "v" .Chart.AppVersion)) }}
         imagePullPolicy: {{ .Values.npdNodeReplace.imagePullPolicy }}
         env:
         - name: SELF_POD_NAME
