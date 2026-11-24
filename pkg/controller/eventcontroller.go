@@ -158,16 +158,7 @@ func (c *EventController) recalcScoreInBucket(nir *nodeIssueReportv1alpha1.NodeI
 	return total
 }
 
-func (c *EventController) constructNodeIssueReport(event *corev1.Event) nodeIssueReportv1alpha1.NodeIssueReport {
-	name := event.InvolvedObject.Name
-	namespace := event.InvolvedObject.Namespace
-	//nodeproblems := make(map[nodeIssueReportv1alpha1.ReasonRecord][]string)
-	//nodeproblems[nodeIssueReportv1alpha1.ReasonRecord{Reason: event.Reason, Count: event.Count}] = []string{event.Message}
-	//return nodeIssueReportv1alpha1.NodeIssueReport{
-	//	ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
-	//	Spec: nodeIssueReportv1alpha1.NodeIssueReportSpec{NodeName: name, NodeProblems: nodeproblems},
-	//}
-
+func (c *EventController) constructNodeIssueReport(event *corev1.Event, node *corev1.Node) nodeIssueReportv1alpha1.NodeIssueReport {
 	nodeprolems := make(map[string]nodeIssueReportv1alpha1.ProblemRecord)
 	messageentry := nodeIssueReportv1alpha1.MessageEntry{
 		Timestamp: event.LastTimestamp,
@@ -180,10 +171,7 @@ func (c *EventController) constructNodeIssueReport(event *corev1.Event) nodeIssu
 	initialScore := c.getEventScoreForNode(event.InvolvedObject.Name, event.Reason)
 
 	return nodeIssueReportv1alpha1.NodeIssueReport{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: namespace,
-		},
+		ObjectMeta: nodeReportMetadata(node, event.Namespace),
 		Spec: nodeIssueReportv1alpha1.NodeIssueReportSpec{
 			NodeName:       event.InvolvedObject.Name,
 			NodeProblems:   nodeprolems,
@@ -204,6 +192,8 @@ func (c *EventController) constructNodeIssueReport(event *corev1.Event) nodeIssu
 // }
 
 func (c *EventController) updateNodeIssueReport(nodeissuereport *nodeIssueReportv1alpha1.NodeIssueReport, event *corev1.Event) error {
+	// Informer lister results are shared cache objects. Always mutate a copy.
+	nodeissuereport = nodeissuereport.DeepCopy()
 	//nodeissuereport.Spec.NodeProblems[nodeIssueReportv1alpha1.ReasonRecord{Reason: event.Reason, Count: event.Count}] = []string{event.Message}
 	//_, err := c.nirclient.NodeissuereporterV1alpha1().NodeIssueReports(nodeissuereport.Namespace).Update(context.Background(), nodeissuereport, metav1.UpdateOptions{})
 	//if err != nil {
@@ -282,6 +272,21 @@ func (c *EventController) processNextItem() bool {
 
 	nodename := event.InvolvedObject.Name
 
+	node, err := c.NodeLister.Get(nodename)
+	if errors.IsNotFound(err) {
+		return true
+	}
+	if err != nil {
+		c.logger.Errorln("failed to get node for event:", err)
+		c.requeue(key)
+		return true
+	}
+	// Some NPD event producers use the node name as the involvedObject UID.
+	eventUID := event.InvolvedObject.UID
+	if event.LastTimestamp.Before(&node.CreationTimestamp) || (eventUID != "" && string(eventUID) != nodename && eventUID != node.UID) {
+		return true
+	}
+
 	// usually the namespace is "default", inhirited from the events
 	nodeissuereport, err := c.nodeIssueReportLister.NodeIssueReports(namespace).Get(nodename)
 	// _ = nodeissuereport
@@ -291,7 +296,7 @@ func (c *EventController) processNextItem() bool {
 	// 4. if there is a node issue report, update the node issue report
 	if errors.IsNotFound(err) {
 		c.logger.Infoln("no node issue report found for the node: ", nodename)
-		nodeissuereport := c.constructNodeIssueReport(event)
+		nodeissuereport := c.constructNodeIssueReport(event, node)
 
 		_, err = c.nirclient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Create(context.Background(), &nodeissuereport, metav1.CreateOptions{})
 		if err != nil {
@@ -305,6 +310,10 @@ func (c *EventController) processNextItem() bool {
 		return true
 	}
 
+	if err != nil || !reportMatchesNode(nodeissuereport, node) {
+		c.requeue(key)
+		return true
+	}
 	err = c.updateNodeIssueReport(nodeissuereport, event)
 	if err != nil {
 		c.logger.Errorln("failed to update node issue report", err)

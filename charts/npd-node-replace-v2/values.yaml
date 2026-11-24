@@ -4,7 +4,7 @@ npdNodeReplace:
   replicas: 2
   image:
     repository: zxxxxzz/npd-node-replace-v2
-    tag: latest
+    tag: ""  # Defaults to the versioned image for this chart.
   imagePullPolicy: Always
   resources:
     requests:

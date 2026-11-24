@@ -7,7 +7,6 @@ import (
 	"os"
 	"strings"
 	"time"
-	awspkg "xingzhan-node-autoreplace/pkg/aws"
 	nirclient "xingzhan-node-autoreplace/pkg/generated/clientset/versioned"
 	nodeIssueReport "xingzhan-node-autoreplace/pkg/generated/informers/externalversions/nodeIssueReport/v1alpha1"
 	"xingzhan-node-autoreplace/pkg/metrics"
@@ -33,7 +32,22 @@ import (
 	// policyv1beta1 "k8s.io/api/policy/v1beta1"
 )
 
-const workercount = 3
+const (
+	workercount = 3
+
+	rebootStartedNotificationAnnotation   = "nodeissuereporter.xingzhan.io/reboot-started-notification"
+	rebootCompletedNotificationAnnotation = "nodeissuereporter.xingzhan.io/reboot-completed-notification"
+	notificationSending                   = "sending"
+	notificationSent                      = "sent"
+	notificationFailed                    = "failed"
+)
+
+type AWSOperations interface {
+	RebootInstance(instanceID string) error
+	DetachInstance(asgID string, instanceID string) error
+	GetASGId(instanceID string) (string, error)
+	SNSNotify(nodeIssueReportv1alpha1.NodeIssueReport, string) error
+}
 
 type NIRController struct {
 	nodeIssueReportInformer nodeIssueReport.NodeIssueReportInformer
@@ -44,9 +58,9 @@ type NIRController struct {
 	queue workqueue.TypedRateLimitingInterface[string]
 
 	nodeIssueReportLister nodeIssueReportLister.NodeIssueReportLister
-	nodeIssueReportClient nirclient.Clientset
+	nodeIssueReportClient nirclient.Interface
 	kubeclient            kubernetes.Clientset
-	awsOperator           awspkg.AwsOperator
+	awsOperator           AWSOperations
 	nodeInformer          informercorev1.NodeInformer
 	nodelister            listercorev1.NodeLister
 	selfpodname           string
@@ -147,7 +161,9 @@ func (n *NIRController) taintNoexecuteOnNode(nodeobj *v1.Node) error {
 
 }
 
-func (n *NIRController) drainNode(nodeobj v1.Node, forcely bool) error {
+func (n *NIRController) drainNode(nodeobj *v1.Node, forcely bool) error {
+	// Objects returned by informer listers are shared and must be treated as read-only.
+	nodeobj = nodeobj.DeepCopy()
 	drainer := &drain.Helper{
 		Ctx:                 context.Background(),
 		Client:              &n.kubeclient,
@@ -161,11 +177,11 @@ func (n *NIRController) drainNode(nodeobj v1.Node, forcely bool) error {
 	}
 
 	if forcely {
-		if err := drain.RunCordonOrUncordon(drainer, &nodeobj, true); err != nil {
+		if err := drain.RunCordonOrUncordon(drainer, nodeobj, true); err != nil {
 			n.logger.Errorln("failed to cordon node during drain operation", err)
 			return err
 		}
-		err := n.taintNoexecuteOnNode(&nodeobj)
+		err := n.taintNoexecuteOnNode(nodeobj)
 		if err != nil {
 			return err
 		}
@@ -175,7 +191,7 @@ func (n *NIRController) drainNode(nodeobj v1.Node, forcely bool) error {
 
 	}
 
-	if err := drain.RunCordonOrUncordon(drainer, &nodeobj, true); err != nil {
+	if err := drain.RunCordonOrUncordon(drainer, nodeobj, true); err != nil {
 		n.logger.Errorln("failed to cordon node during drain operation", err)
 		return err
 	}
@@ -208,7 +224,7 @@ func (n *NIRController) countActiveActionsForEntry(entry *nodeIssueReportv1alpha
 		if err != nil {
 			continue
 		}
-		if val, exists := nodeobj.GetLabels()[parts[0]]; exists && val == parts[1] {
+		if val, exists := nodeobj.GetLabels()[parts[0]]; exists && val == parts[1] && reportMatchesNode(nir, nodeobj) {
 			count++
 		}
 	}
@@ -229,6 +245,134 @@ func (n *NIRController) isDryRun(entry *nodeIssueReportv1alpha1.ToleranceConfigE
 	return true
 }
 
+func rebootNotificationActionID(nir *nodeIssueReportv1alpha1.NodeIssueReport) string {
+	if !nir.Spec.LastActionTime.IsZero() {
+		return nir.Spec.LastActionTime.Time.UTC().Format(time.RFC3339Nano)
+	}
+	if nir.UID != "" {
+		return "uid:" + string(nir.UID)
+	}
+	return nir.Namespace + "/" + nir.Name
+}
+
+func notificationAnnotationValue(state, actionID string) string {
+	return state + ":" + actionID
+}
+
+// used to update object with retry on conflict error, to avoid stale informer snapshot update
+func retryOnConflict(update func() error) error {
+	var err error
+	for attempt := 0; attempt < 5; attempt++ {
+		err = update()
+		if !errors.IsConflict(err) {
+			return err
+		}
+		time.Sleep(time.Duration(1<<attempt) * 10 * time.Millisecond)
+	}
+	return err
+}
+
+// notifyRebootOnce claims a notification in NIR metadata before publishing it.
+// Metadata annotations are used so this remains compatible with the existing CRD.
+// A fresh API read plus resourceVersion-protected Update prevents a stale informer
+// snapshot from publishing the same notification again.
+// 使用 uuid 或者 LastActionTime 来标识一个 reboot action，防止 stale informer snapshot 重复发送通知
+func (n *NIRController) notifyRebootOnce(
+	ctx context.Context,
+	nir *nodeIssueReportv1alpha1.NodeIssueReport,
+	annotationKey string,
+	reason string,
+) (*nodeIssueReportv1alpha1.NodeIssueReport, bool, error) {
+	actionID := rebootNotificationActionID(nir)
+	sendingValue := notificationAnnotationValue(notificationSending, actionID)
+	sentValue := notificationAnnotationValue(notificationSent, actionID)
+
+	var current *nodeIssueReportv1alpha1.NodeIssueReport
+	shouldSend := false
+	err := retryOnConflict(func() error {
+		live, err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(nir.Namespace).Get(ctx, nir.Name, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		current = live
+
+		// A stale reconcile must not attach an old action's notification state to
+		// a newer reboot cycle.
+		// 防止 stale reconcile 将旧的 action 的 notification state 附加到新的 reboot cycle 上
+		if rebootNotificationActionID(live) != actionID {
+			return nil
+		}
+
+		value := live.GetAnnotations()[annotationKey]
+		if value == sendingValue || value == sentValue {
+			return nil
+		}
+
+		candidate := live.DeepCopy()
+		if candidate.Annotations == nil {
+			candidate.Annotations = make(map[string]string)
+		}
+		candidate.Annotations[annotationKey] = sendingValue
+		updated, err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(nir.Namespace).Update(ctx, candidate, metav1.UpdateOptions{})
+		if err != nil {
+			return err
+		}
+		current = updated
+		shouldSend = true
+		return nil
+	})
+	if err != nil || !shouldSend {
+		return current, false, err
+	}
+
+	if err := n.awsOperator.SNSNotify(*current, reason); err != nil {
+		latest, stateErr := n.setNotificationState(ctx, current, annotationKey, sendingValue, notificationAnnotationValue(notificationFailed, actionID))
+		if stateErr != nil {
+			return latest, true, fmt.Errorf("send %s notification: %w (also failed to persist failure state: %v)", reason, err, stateErr)
+		}
+		return latest, true, fmt.Errorf("send %s notification: %w", reason, err)
+	}
+
+	latest, err := n.setNotificationState(ctx, current, annotationKey, sendingValue, sentValue)
+	if err != nil {
+		return latest, true, fmt.Errorf("persist %s notification state: %w", reason, err)
+	}
+	return latest, true, nil
+}
+
+func (n *NIRController) setNotificationState(
+	ctx context.Context,
+	nir *nodeIssueReportv1alpha1.NodeIssueReport,
+	annotationKey string,
+	expectedValue string,
+	newValue string,
+) (*nodeIssueReportv1alpha1.NodeIssueReport, error) {
+	var current *nodeIssueReportv1alpha1.NodeIssueReport
+	err := retryOnConflict(func() error {
+		live, err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(nir.Namespace).Get(ctx, nir.Name, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		current = live
+		if live.GetAnnotations()[annotationKey] != expectedValue {
+			return nil
+		}
+
+		candidate := live.DeepCopy()
+		if candidate.Annotations == nil {
+			candidate.Annotations = make(map[string]string)
+		}
+		candidate.Annotations[annotationKey] = newValue
+		updated, err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(nir.Namespace).Update(ctx, candidate, metav1.UpdateOptions{})
+		if err != nil {
+			return err
+		}
+		current = updated
+		return nil
+	})
+	return current, err
+}
+
 func (n *NIRController) processNextItem() bool {
 	key, shutdown := n.queue.Get()
 	if shutdown {
@@ -243,7 +387,6 @@ func (n *NIRController) processNextItem() bool {
 		n.queue.AddRateLimited(key)
 		return true
 	}
-
 	nodeIssueReport, err := n.nodeIssueReportLister.NodeIssueReports(namespace).Get(name)
 
 	if err != nil {
@@ -252,10 +395,19 @@ func (n *NIRController) processNextItem() bool {
 		// n.queue.AddRateLimited(key)
 		return true
 	}
+	// Informer cache objects are shared and must never be mutated in place.
+	nodeIssueReport = nodeIssueReport.DeepCopy()
 
 	nodename := nodeIssueReport.Spec.NodeName
 
-	nodeobj, err := n.nodelister.Get(nodename)
+	var nodeobj *v1.Node
+	switch nodeIssueReport.Spec.Phase {
+	case nodeIssueReportv1alpha1.PhaseReplace, nodeIssueReportv1alpha1.PhaseReboot,
+		nodeIssueReportv1alpha1.PhaseRebooted, nodeIssueReportv1alpha1.PhaseNewJoined, nodeIssueReportv1alpha1.PhaseDrained:
+		nodeobj, err = n.kubeclient.CoreV1().Nodes().Get(context.Background(), nodename, metav1.GetOptions{})
+	default:
+		nodeobj, err = n.nodelister.Get(nodename)
+	}
 	if errors.IsNotFound(err) {
 		n.logger.Infoln("node object not found, may be already deleted:", nodename)
 		return true
@@ -266,7 +418,14 @@ func (n *NIRController) processNextItem() bool {
 		return true
 	}
 
+	if !reportMatchesNode(nodeIssueReport, nodeobj) {
+		n.logger.Infof("Skipping report %s because its owner differs from Node %s (%s)", key, nodeobj.Name, nodeobj.UID)
+		return true
+	}
+
 	if nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseDrained {
+		deleteNode := metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &nodeobj.UID}}
+		deleteReport := metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &nodeIssueReport.UID}}
 		if nodeIssueReport.Name == n.selfnodename {
 
 			// Notify admin with SNS
@@ -276,7 +435,7 @@ func (n *NIRController) processNextItem() bool {
 				return true
 			}
 			// delete nodeIssueReport
-			if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Delete(context.TODO(), nodeIssueReport.Name, metav1.DeleteOptions{}); err != nil {
+			if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Delete(context.TODO(), nodeIssueReport.Name, deleteReport); err != nil && !errors.IsNotFound(err) {
 				n.logger.Errorln("[node drained phase] faild to delete nodeIssueReport", nodeIssueReport.Name)
 			} else {
 				n.logger.Infoln("[node drained phase] replace Action done, deleted nodeIssueReport:", nodeIssueReport.Name)
@@ -284,7 +443,7 @@ func (n *NIRController) processNextItem() bool {
 			// delete issue node
 			if nodeIssueReport.Name == n.selfnodename {
 
-				if err := n.kubeclient.CoreV1().Nodes().Delete(context.TODO(), n.selfnodename, metav1.DeleteOptions{}); err != nil {
+				if err := n.kubeclient.CoreV1().Nodes().Delete(context.TODO(), nodename, deleteNode); err != nil {
 					n.logger.Errorln("[node drained phase] when trying to delete self node, error happened:", err)
 				}
 				if err := n.kubeclient.CoreV1().Pods(n.selfpodnamespace).Delete(context.TODO(), n.selfpodname, metav1.DeleteOptions{}); err != nil {
@@ -301,12 +460,12 @@ func (n *NIRController) processNextItem() bool {
 				n.queue.AddRateLimited(key)
 				return true
 			}
-			if err := n.kubeclient.CoreV1().Nodes().Delete(context.TODO(), nodeIssueReport.Name, metav1.DeleteOptions{}); err != nil {
+			if err := n.kubeclient.CoreV1().Nodes().Delete(context.TODO(), nodename, deleteNode); err != nil {
 				n.logger.Errorln("[node drained phase] when trying to delete none-self node, error happened:", err)
 				n.queue.AddRateLimited(key)
 				return true
 			}
-			if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Delete(context.TODO(), nodeIssueReport.Name, metav1.DeleteOptions{}); err != nil {
+			if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Delete(context.TODO(), nodeIssueReport.Name, deleteReport); err != nil && !errors.IsNotFound(err) {
 				n.logger.Errorln("[node drained phase] faild to delete nodeIssueReport", nodeIssueReport.Name, "with error:", err)
 			} else {
 				n.logger.Infoln("[node drained phase] replace Action done, deleted nodeIssueReport:", nodeIssueReport.Name)
@@ -319,25 +478,20 @@ func (n *NIRController) processNextItem() bool {
 	if nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseNewJoined {
 		// TODO drain
 		// err = n.drainNode(nodename)
-		nodeobj, err := n.nodelister.Get(nodename)
-		if err != nil {
-			n.logger.Errorln("[node newnodejoined phase] fail to get node object when trying to drain node:", nodename, "with error:", err)
-			n.queue.AddRateLimited(key)
-			return true
-		}
+		nodeobj = nodeobj.DeepCopy()
 
 		// for notready node, do normal drain
 
 		// for unknown status node, do forcely drain
 		if nodeIssueReport.Spec.NodeStatus == nodeIssueReportv1alpha1.NodeUnknownStatus {
-			err = n.drainNode(*nodeobj, true)
+			err = n.drainNode(nodeobj, true)
 			if err != nil {
 				n.logger.Errorln("[node newnodejoined phase] fail to drain node forcely:", err)
 				n.queue.AddRateLimited(key)
 				return true
 			}
 		} else {
-			err = n.drainNode(*nodeobj, false)
+			err = n.drainNode(nodeobj, false)
 			if err != nil {
 				n.logger.Errorln("[node newnodejoined phase] fail to drain node:", err)
 				// TODO: when failed to drain node,  drain operation may be never happen again, because no new node will join, need to fix this
@@ -389,12 +543,6 @@ func (n *NIRController) processNextItem() bool {
 
 	if nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseReplace {
 		n.logger.Infoln("[node replace phase] do phase replace action for node:", nodename)
-		nodeobj, err := n.kubeclient.CoreV1().Nodes().Get(context.Background(), nodename, metav1.GetOptions{})
-		if err != nil {
-			n.logger.Errorln("fail to get the node:", nodename, "thus failed to deal with node issues: ", err)
-			n.queue.AddRateLimited(key)
-			return true
-		}
 		providerIDslice := strings.Split(nodeobj.Spec.ProviderID, "/")
 
 		instanceId := providerIDslice[len(providerIDslice)-1]
@@ -426,10 +574,18 @@ func (n *NIRController) processNextItem() bool {
 	if nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseRebooted {
 		n.logger.Infoln("[node rebooted phase] node has been rebooted, checking node status", nodename)
 
-		nodeobj, err := n.kubeclient.CoreV1().Nodes().Get(context.Background(), nodename, metav1.GetOptions{})
-		if err != nil {
-			n.logger.Errorln("[node rebooted phase] fail to get the node:", nodename, "with error", err)
-			n.queue.AddRateLimited(key)
+		// Retry a failed reboot-started notification without ever publishing a
+		// second copy after a successful/claimed send.
+		latestNIR, sent, notifyErr := n.notifyRebootOnce(context.Background(), nodeIssueReport, rebootStartedNotificationAnnotation, "reboot-started")
+		if latestNIR != nil {
+			nodeIssueReport = latestNIR.DeepCopy()
+		}
+		if notifyErr != nil {
+			n.logger.Errorln("[node rebooted phase] failed to send reboot-started notification:", notifyErr)
+		} else if sent {
+			n.logger.Infoln("[node rebooted phase] sent reboot-started notification for node:", nodename)
+		}
+		if nodeIssueReport.Spec.Phase != nodeIssueReportv1alpha1.PhaseRebooted {
 			return true
 		}
 
@@ -475,8 +631,17 @@ func (n *NIRController) processNextItem() bool {
 		}
 		n.logger.Infoln("[node rebooted phase] successfully uncordoned node:", nodename)
 
-		if err := n.awsOperator.SNSNotify(*nodeIssueReport, "reboot"); err != nil {
-			n.logger.Error("[node rebooted phase] failed to notify admin after reboot completed", err)
+		latestNIR, sent, notifyErr = n.notifyRebootOnce(context.Background(), nodeIssueReport, rebootCompletedNotificationAnnotation, "reboot-completed")
+		if latestNIR != nil {
+			nodeIssueReport = latestNIR.DeepCopy()
+		}
+		if notifyErr != nil {
+			n.logger.Error("[node rebooted phase] failed to send reboot-completed notification: ", notifyErr)
+		} else if sent {
+			n.logger.Infoln("[node rebooted phase] sent reboot-completed notification for node:", nodename)
+		}
+		if nodeIssueReport.Spec.Phase != nodeIssueReportv1alpha1.PhaseRebooted {
+			return true
 		}
 
 		// Reboot is not a terminal action - keep NIR for escalation evaluation.
@@ -495,12 +660,6 @@ func (n *NIRController) processNextItem() bool {
 
 	if nodeIssueReport.Spec.Phase == nodeIssueReportv1alpha1.PhaseReboot {
 		n.logger.Infoln("[node reboot phase] do phase reboot action for node:", nodename)
-		nodeobj, err := n.kubeclient.CoreV1().Nodes().Get(context.Background(), nodename, metav1.GetOptions{})
-		if err != nil {
-			n.logger.Errorln("[node reboot phase] fail to get the node:", nodename, "thus failed to deal with node issues: ", err)
-			n.queue.AddRateLimited(key)
-			return true
-		}
 		providerIDslice := strings.Split(nodeobj.Spec.ProviderID, "/")
 
 		instanceId := providerIDslice[len(providerIDslice)-1]
@@ -508,7 +667,7 @@ func (n *NIRController) processNextItem() bool {
 		n.logger.Infoln("[node reboot phase] before do reboot action , get instance Id:", instanceId)
 
 		// Added logic to drain node before reboot node.
-		err = n.drainNode(*nodeobj, false)
+		err = n.drainNode(nodeobj, false)
 		if err != nil {
 			n.logger.Errorln("[node reboot phase] fail to drain node:", err)
 			// TODO: when failed to drain node,  drain operation may be never happen again, because no new node will join, need to fix this
@@ -526,9 +685,17 @@ func (n *NIRController) processNextItem() bool {
 		}
 		n.logger.Infoln("[node reboot phase] successfully rebooted node:", nodename)
 
-		// TODO: add function to notice user what happened, for investigating root cause
-		if err := n.awsOperator.SNSNotify(*nodeIssueReport, "reboot"); err != nil {
-			n.logger.Error("[node reboot phase] failed to notify admin when reboot node", err)
+		latestNIR, sent, notifyErr := n.notifyRebootOnce(context.Background(), nodeIssueReport, rebootStartedNotificationAnnotation, "reboot-started")
+		if latestNIR != nil {
+			nodeIssueReport = latestNIR.DeepCopy()
+		}
+		if notifyErr != nil {
+			n.logger.Error("[node reboot phase] failed to send reboot-started notification: ", notifyErr)
+		} else if sent {
+			n.logger.Infoln("[node reboot phase] sent reboot-started notification for node:", nodename)
+		}
+		if nodeIssueReport.Spec.Phase != nodeIssueReportv1alpha1.PhaseReboot {
+			return true
 		}
 		nodeIssueReport.Spec.Phase = nodeIssueReportv1alpha1.PhaseRebooted
 		nodeIssueReport.Spec.LastUpdateTime = metav1.Now()
@@ -627,7 +794,7 @@ func (n *NIRController) processNextItem() bool {
 				if nodeIssueReport.Spec.Escalated {
 					// Escalated paging is a terminal action - delete NIR
 					n.logger.Infoln("[paging] escalated paging completed, deleting NIR for node:", nodename)
-					if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Delete(context.TODO(), nodeIssueReport.Name, metav1.DeleteOptions{}); err != nil {
+					if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(namespace).Delete(context.TODO(), nodeIssueReport.Name, *metav1.NewPreconditionDeleteOptions(string(nodeIssueReport.UID))); err != nil && !errors.IsNotFound(err) {
 						n.logger.Errorln("[paging] failed to delete nodeIssueReport after escalated paging:", err)
 						n.queue.AddRateLimited(key)
 					}
@@ -779,7 +946,7 @@ func (n *NIRController) cleanupExpiredNIRs() {
 		}
 
 		nodeobj, err := n.nodelister.Get(nir.Spec.NodeName)
-		if err != nil {
+		if err != nil || !reportMatchesNode(nir, nodeobj) {
 			continue
 		}
 		toleranceEntry, err := n.getToleranceConfigForNode(nodeobj)
@@ -794,14 +961,14 @@ func (n *NIRController) cleanupExpiredNIRs() {
 			if err := n.awsOperator.SNSNotify(*nir, "cooldown-expired"); err != nil {
 				n.logger.Error("[lifecycle cleanup] failed to send final status notification:", err)
 			}
-			if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(nir.Namespace).Delete(context.TODO(), nir.Name, metav1.DeleteOptions{}); err != nil {
+			if err := n.nodeIssueReportClient.NodeissuereporterV1alpha1().NodeIssueReports(nir.Namespace).Delete(context.TODO(), nir.Name, *metav1.NewPreconditionDeleteOptions(string(nir.UID))); err != nil && !errors.IsNotFound(err) {
 				n.logger.Errorln("[lifecycle cleanup] failed to delete expired NIR:", nir.Name, err)
 			}
 		}
 	}
 }
 
-func NewNIRController(nodeIssueReportInformer nodeIssueReport.NodeIssueReportInformer, toleranceConfigInformer nodeIssueReport.ToleranceConfigInformer, nodeIssueReportClient nirclient.Clientset, kubeclient kubernetes.Clientset, awsOperator awspkg.AwsOperator, nodeInformer informercorev1.NodeInformer) *NIRController {
+func NewNIRController(nodeIssueReportInformer nodeIssueReport.NodeIssueReportInformer, toleranceConfigInformer nodeIssueReport.ToleranceConfigInformer, nodeIssueReportClient nirclient.Interface, kubeclient kubernetes.Clientset, awsOperator AWSOperations, nodeInformer informercorev1.NodeInformer) *NIRController {
 	n := &NIRController{
 		nodeIssueReportInformer: nodeIssueReportInformer,
 		toleranceConfigInformer: toleranceConfigInformer,

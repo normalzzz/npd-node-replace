@@ -14,6 +14,10 @@ import (
 // for testing purposes. This mirrors the switch-case logic exactly.
 func buildSNSSubject(reason string) string {
 	switch reason {
+	case "reboot-started":
+		return "[npd-node-replace] Node reboot started due to persistent issues"
+	case "reboot-completed":
+		return "[npd-node-replace] Node reboot completed"
 	case "reboot":
 		return "[npd-node-replace] Node REBOOTED due to persistent issues"
 	case "replace":
@@ -54,6 +58,16 @@ func TestSNSSubjectConstruction(t *testing.T) {
 		reason       string
 		wantContains []string
 	}{
+		{
+			name:         "reason reboot-started identifies the start notification",
+			reason:       "reboot-started",
+			wantContains: []string{"reboot started"},
+		},
+		{
+			name:         "reason reboot-completed identifies the completion notification",
+			reason:       "reboot-completed",
+			wantContains: []string{"reboot completed"},
+		},
 		{
 			name:         "reason reboot produces subject containing REBOOTED",
 			reason:       "reboot",

@@ -137,7 +137,8 @@ drain → RebootInstances API 返回 → Phase=PhaseRebooted
 
 | 场景 | 邮件主题 |
 |------|---------|
-| reboot | `[npd-node-replace] Node REBOOTED due to persistent issues` |
+| reboot 已发起 | `[npd-node-replace] Node reboot started due to persistent issues` |
+| reboot 已完成 | `[npd-node-replace] Node reboot completed` |
 | replace | `[npd-node-replace] Node REPLACED due to persistent issues` |
 | paging | `[npd-node-replace] Node issues detected - admin notification (paging)` |
 | allowOperation=false | `[npd-node-replace] Node issues detected - auto-action disabled, notify only` |

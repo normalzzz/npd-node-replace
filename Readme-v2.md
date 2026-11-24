@@ -396,7 +396,8 @@ Prometheus scrape 配置示例：
 
 | 场景 | 邮件主题 |
 |------|---------|
-| 节点被 reboot | `[npd-node-replace] Node REBOOTED due to persistent issues` |
+| reboot 已发起 | `[npd-node-replace] Node reboot started due to persistent issues` |
+| reboot 已完成 | `[npd-node-replace] Node reboot completed` |
 | 节点被 replace | `[npd-node-replace] Node REPLACED due to persistent issues` |
 | Paging（仅通知） | `[npd-node-replace] Node issues detected - admin notification (paging)` |
 | allowOperation=false | `[npd-node-replace] Node issues detected - auto-action disabled, notify only` |
@@ -404,6 +405,13 @@ Prometheus scrape 配置示例：
 | Escalation paging | `[npd-node-replace] ESCALATION - repeated issues after action, admin notification` |
 | 并发限制等待 | `[npd-node-replace] Action DELAYED - max concurrent actions reached, waiting for capacity` |
 | Dry-run | `[npd-node-replace] DRY-RUN: would execute {action}, but dry-run mode is enabled` |
+
+Reboot 通知状态通过 NodeIssueReport 的 metadata annotations 持久化，无需修改 CRD：
+
+- `nodeissuereporter.xingzhan.io/reboot-started-notification`
+- `nodeissuereporter.xingzhan.io/reboot-completed-notification`
+
+annotation 值包含通知状态和本轮 action ID，例如 `sent:2026-09-03T08:28:52.123456789Z`，用于在重复 reconcile 时抑制重复通知。
 
 ## 测试
 

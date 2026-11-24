@@ -77,9 +77,9 @@ func (a *AwsOperator) GetASGId(instanceid string) (string, error) {
 
 	describeinstancesout, err := a.ec2client.DescribeInstances(context.Background(), &describeinstanceInput)
 	if err != nil {
-    log.Errorln("failed to describe instance:", instanceid, "with error:", err)
+		log.Errorln("failed to describe instance:", instanceid, "with error:", err)
 		return "", fmt.Errorf("failed to describe instance %s: %w", instanceid, err)
-		}
+	}
 
 	if len(describeinstancesout.Reservations) == 0 || len(describeinstancesout.Reservations[0].Instances) == 0 {
 		return "", fmt.Errorf("no instance found for id %s", instanceid)
@@ -117,7 +117,12 @@ func (a *AwsOperator) SNSNotify(nodeissuereport nodeIssueReportv1alpha1.NodeIssu
 
 	var snsSubject string
 	switch reason {
+	case "reboot-started":
+		snsSubject = "[npd-node-replace] Node reboot started due to persistent issues"
+	case "reboot-completed":
+		snsSubject = "[npd-node-replace] Node reboot completed"
 	case "reboot":
+		// Kept for compatibility with callers outside the v2 reboot state machine.
 		snsSubject = "[npd-node-replace] Node REBOOTED due to persistent issues"
 	case "replace":
 		snsSubject = "[npd-node-replace] Node REPLACED due to persistent issues"

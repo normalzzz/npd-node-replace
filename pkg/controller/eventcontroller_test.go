@@ -356,6 +356,7 @@ func TestConstructNodeIssueReport(t *testing.T) {
 	node := newTestNode("node-1", map[string]string{
 		"eks.amazonaws.com/nodegroup": "ng-1",
 	}, nil, nil)
+	node.UID = "original-node-uid"
 	nodeLister := &fakeNodeLister{nodes: []*corev1.Node{node}}
 
 	toleranceConfigs := []*nodeIssueReportv1alpha1.ToleranceConfig{
@@ -384,24 +385,43 @@ func TestConstructNodeIssueReport(t *testing.T) {
 	event := &corev1.Event{
 		ObjectMeta: metav1.ObjectMeta{Name: "evt-1", Namespace: "default"},
 		InvolvedObject: corev1.ObjectReference{
-			Kind:      "Node",
-			Name:      "node-1",
-			Namespace: "default",
+			Kind: "Node",
+			Name: node.Name,
+			UID:  "node-1", // Some NPD monitors put the node name here.
 		},
 		Reason:        "OOMKilling",
 		Message:       "OOM detected",
 		LastTimestamp: metav1.Time{Time: time.Now()},
 	}
 
+	t.Run("both creation paths bind the report to the original Node UID", func(t *testing.T) {
+		fromEvent := c.constructNodeIssueReport(event, node)
+		fromNode := (&NodeController{}).constructNodeIssueReportForNode(node)
+		replacement := node.DeepCopy()
+		replacement.UID = "replacement-node-uid"
+		for _, nir := range []*nodeIssueReportv1alpha1.NodeIssueReport{&fromEvent, fromNode} {
+			want := metav1.OwnerReference{APIVersion: "v1", Kind: "Node", Name: node.Name, UID: node.UID}
+			if len(nir.OwnerReferences) != 1 || nir.OwnerReferences[0] != want {
+				t.Fatalf("ownerReferences = %+v, want %+v", nir.OwnerReferences, want)
+			}
+			if !reportMatchesNode(nir, node) || reportMatchesNode(nir, replacement) {
+				t.Fatal("report must match only its original Node")
+			}
+		}
+		if !reportMatchesNode(&nodeIssueReportv1alpha1.NodeIssueReport{}, node) {
+			t.Fatal("legacy reports must still be processed")
+		}
+	})
+
 	t.Run("NIR has correct NodeName from event", func(t *testing.T) {
-		nir := c.constructNodeIssueReport(event)
+		nir := c.constructNodeIssueReport(event, node)
 		if nir.Spec.NodeName != "node-1" {
 			t.Errorf("NodeName = %s, want node-1", nir.Spec.NodeName)
 		}
 	})
 
 	t.Run("NIR has Phase=PhaseNone and Action=None", func(t *testing.T) {
-		nir := c.constructNodeIssueReport(event)
+		nir := c.constructNodeIssueReport(event, node)
 		if nir.Spec.Phase != nodeIssueReportv1alpha1.PhaseNone {
 			t.Errorf("Phase = %s, want %s", nir.Spec.Phase, nodeIssueReportv1alpha1.PhaseNone)
 		}
@@ -411,14 +431,14 @@ func TestConstructNodeIssueReport(t *testing.T) {
 	})
 
 	t.Run("NIR has initial ScoreInBucket from configured score", func(t *testing.T) {
-		nir := c.constructNodeIssueReport(event)
+		nir := c.constructNodeIssueReport(event, node)
 		if nir.Spec.ScoreInBucket != 5 {
 			t.Errorf("ScoreInBucket = %d, want 5", nir.Spec.ScoreInBucket)
 		}
 	})
 
 	t.Run("NIR NodeProblems has exactly one entry keyed by event Reason", func(t *testing.T) {
-		nir := c.constructNodeIssueReport(event)
+		nir := c.constructNodeIssueReport(event, node)
 		if len(nir.Spec.NodeProblems) != 1 {
 			t.Errorf("NodeProblems has %d entries, want 1", len(nir.Spec.NodeProblems))
 		}
